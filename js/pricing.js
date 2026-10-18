@@ -8,6 +8,19 @@
 
 const LOG_SIZES = [['', 'Not set'], ['small', 'Small'], ['medium', 'Medium'], ['big', 'Big']];
 const sizeName = (k) => (LOG_SIZES.find((s) => s[0] === k) || ['', ''])[1];
+// Logs are normally cut 8 ft long; sometimes the 8 ft is cut into two 4 ft pieces.
+const LOG_LENGTHS = [['8ft', '8 ft single'], ['2x4ft', '2 × 4 ft pieces']];
+const lengthName = (k) => (LOG_LENGTHS.find((s) => s[0] === k) || ['', ''])[1];
+
+// How past orders with the same value of a field sold compared with the market.
+function learnPremium(field, value, wood) {
+  let list = state.orders.filter((o) => o[field] === value && o.woodType === wood);
+  let scope = wood;
+  if (list.length < 3) { list = state.orders.filter((o) => o[field] === value); scope = 'all woods'; }
+  const ps = list.map(orderPremium).filter((v) => v != null);
+  if (!ps.length) return { p: 0, n: 0, scope, avg: 0 };
+  return { p: mean(ps) * (ps.length / (ps.length + 3)), n: ps.length, scope, avg: mean(ps) };
+}
 
 /* ---------- Photo fingerprint ----------
    A small summary of a photo: colours (bark / cut-end colour), brightness,
@@ -80,7 +93,7 @@ function orderPremium(o) {
 }
 const mean = (a) => a.reduce((x, y) => x + y, 0) / (a.length || 1);
 
-function priceSuggestion({ wood, logSize, feats }) {
+function priceSuggestion({ wood, logSize, logLength, feats }) {
   if (!wood) return { ready: false, reason: 'Choose the wood type.' };
   const ol = priceOutlook(wood);
   if (!ol.ready || !ol.current) return { ready: false, reason: `No bills with ${wood} yet. Add a few ${wood} orders with weight and price, and the app will start suggesting prices.` };
@@ -92,17 +105,20 @@ function priceSuggestion({ wood, logSize, feats }) {
   // Log size: how did past loads of this size sell compared with the market?
   let sizeP = 0; let sizeN = 0;
   if (logSize) {
-    let list = state.orders.filter((o) => o.logSize === logSize && o.woodType === wood);
-    let scope = wood;
-    if (list.length < 3) { list = state.orders.filter((o) => o.logSize === logSize); scope = 'all woods'; }
-    const ps = list.map(orderPremium).filter((v) => v != null);
-    if (ps.length) {
-      sizeN = ps.length;
-      sizeP = mean(ps) * (ps.length / (ps.length + 3));
-      factors.push({ icon: '📏', label: `${sizeName(logSize)} logs`, text: `${ps.length} past ${sizeName(logSize).toLowerCase()} load${ps.length === 1 ? '' : 's'} (${scope}) sold ${sgn(mean(ps) * 100)} vs market`, pct: sizeP * 100 });
-    } else {
-      factors.push({ icon: '📏', label: `${sizeName(logSize)} logs`, text: 'No past orders with this log size yet – mark log size on your orders to learn', pct: 0 });
-    }
+    const L = learnPremium('logSize', logSize, wood);
+    sizeP = L.p; sizeN = L.n;
+    factors.push(L.n
+      ? { icon: '📏', label: `${sizeName(logSize)} logs`, text: `${L.n} past ${sizeName(logSize).toLowerCase()} load${L.n === 1 ? '' : 's'} (${L.scope}) sold ${sgn(L.avg * 100)} vs market`, pct: sizeP * 100 }
+      : { icon: '📏', label: `${sizeName(logSize)} logs`, text: 'No past orders with this log size yet – mark log size on your orders to learn', pct: 0 });
+  }
+  // Log length: 8 ft single vs two 4 ft pieces.
+  let lenP = 0;
+  if (logLength) {
+    const L = learnPremium('logLength', logLength, wood);
+    lenP = L.p;
+    factors.push(L.n
+      ? { icon: '📐', label: lengthName(logLength), text: `${L.n} past load${L.n === 1 ? '' : 's'} (${L.scope}) sold ${sgn(L.avg * 100)} vs market`, pct: lenP * 100 }
+      : { icon: '📐', label: lengthName(logLength), text: 'No past orders with this length yet – it learns as you mark length on orders', pct: 0 });
   }
 
   // Photo: find past loads that look similar.
@@ -114,7 +130,7 @@ function priceSuggestion({ wood, logSize, feats }) {
       let best = 0; let fileId = null;
       for (const [fid, f] of Object.entries(o.woodFeats)) { const s = photoSim(feats, f); if (s > best) { best = s; fileId = fid; } }
       if (!fileId) continue;
-      cands.push({ o, sim: best, rank: best + (o.woodType === wood ? 0.05 : 0), fileId, prem: orderPremium(o) });
+      cands.push({ o, sim: best, rank: best + (o.woodType === wood ? 0.05 : 0) + (logLength && o.logLength === logLength ? 0.03 : 0), fileId, prem: orderPremium(o) });
     }
     cands.sort((a, b) => b.rank - a.rank);
     similar = cands.slice(0, 3);
@@ -129,7 +145,7 @@ function priceSuggestion({ wood, logSize, feats }) {
     }
   }
 
-  const prem = clamp(sizeP + (logSize ? 0.6 : 1) * photoP, -0.25, 0.25);
+  const prem = clamp(sizeP + lenP + (logSize ? 0.6 : 1) * photoP, -0.25, 0.25);
   const step = settings.priceUnit === 'ton' ? 10 : 0.1;
   const roundTo = (v) => Math.round(v / step) * step;
   const price = roundTo(base * (1 + prem));
@@ -151,13 +167,16 @@ function priceSuggestion({ wood, logSize, feats }) {
 /* ---------- Price check screen ---------- */
 function renderPriceCheck(view) {
   const woods = usedWoods();
-  const pc = state.priceCheck || (state.priceCheck = { wood: woods[0] || '', logSize: '', weight: '', unit: settings.defaultUnit, photo: null, feats: null });
+  const pc = state.priceCheck || (state.priceCheck = { wood: woods[0] || '', logSize: '', logLength: '8ft', weight: '', unit: settings.defaultUnit, photo: null, feats: null });
+  if (pc.logLength === undefined) pc.logLength = '8ft';
   view.innerHTML = `
     <div class="card">
       <p class="small muted" style="margin-top:0">Take a photo of the logs loaded on the lorry and choose the wood. The app suggests a price from your past orders, the log size and today's market.</p>
       <div class="field"><label for="pcWood">Wood type</label><select class="input" id="pcWood">${woodOpts(pc.wood)}</select></div>
       <div class="field"><label>Log size (girth)</label>
         <div class="seg" id="pcSize" style="margin:0">${LOG_SIZES.map(([k, l]) => `<button type="button" data-s="${k}" class="${pc.logSize === k ? 'active' : ''}">${k ? l : '—'}</button>`).join('')}</div></div>
+      <div class="field"><label>Log length</label>
+        <div class="seg" id="pcLen" style="margin:0">${LOG_LENGTHS.map(([k, l]) => `<button type="button" data-l="${k}" class="${pc.logLength === k ? 'active' : ''}">${l}</button>`).join('')}</div></div>
       <div class="field"><label>Photo of the load</label>
         <div class="thumbs" id="pcPhoto"></div>
         <input type="file" id="pcCam" accept="image/*" capture="environment" hidden>
@@ -201,13 +220,18 @@ function renderPriceCheck(view) {
     $$('#pcSize button').forEach((x) => x.classList.toggle('active', x === b));
     compute();
   });
+  $$('#pcLen button').forEach((b) => b.onclick = () => {
+    pc.logLength = b.dataset.l;
+    $$('#pcLen button').forEach((x) => x.classList.toggle('active', x === b));
+    compute();
+  });
   $('#pcWeight').oninput = (e) => { pc.weight = e.target.value; compute(); };
   $('#pcUnit').onchange = (e) => { pc.unit = e.target.value; compute(); };
 
   function compute() {
     const box = $('#pcResult');
     if (!box) return;
-    const r = priceSuggestion({ wood: pc.wood, logSize: pc.logSize, feats: pc.feats });
+    const r = priceSuggestion({ wood: pc.wood, logSize: pc.logSize, logLength: pc.logLength, feats: pc.feats });
     if (!r.ready) { box.innerHTML = `<div class="card empty" style="padding:20px">${ICON.chart}<p>${esc(r.reason)}</p></div>`; return; }
     const kg = pc.unit === 'ton' ? num(pc.weight) * 1000 : num(pc.weight);
     const perKgPrice = settings.priceUnit === 'ton' ? r.price / 1000 : r.price;
@@ -215,7 +239,7 @@ function renderPriceCheck(view) {
     const comm = round2((total * settings.commissionPct) / 100);
     box.innerHTML = `
       <div class="card price-card">
-        <div class="small muted">Suggested price · ${esc(r.wood)}${pc.logSize ? ' · ' + sizeName(pc.logSize) + ' logs' : ''}</div>
+        <div class="small muted">Suggested price · ${esc(r.wood)}${pc.logSize ? ' · ' + sizeName(pc.logSize) + ' logs' : ''}${pc.logLength ? ' · ' + lengthName(pc.logLength) : ''}</div>
         <div class="price-big">${money0(r.price)}<span>${priceLabel()}</span></div>
         <div class="small">Fair range <b>${money0(r.low)} – ${money0(r.high)}</b> <span class="conf conf-${r.confidence.toLowerCase()}">${r.confidence} confidence</span></div>
         ${kg ? `<div class="price-total"><div><span class="small muted">Load value (${fmtWeight(kg)})</span><b>${money0(total)}</b></div><div><span class="small muted">My brokerage ${nf.format(settings.commissionPct)}%</span><b style="color:var(--accent)">${money0(comm)}</b></div></div>` : ''}
@@ -227,7 +251,7 @@ function renderPriceCheck(view) {
         const p = billPrice(c.o);
         return `<div class="item" data-order="${esc(c.o.id)}"><div class="thumb sim-thumb" id="sim${i}"></div>
           <div class="main"><div class="title">${esc(c.o.woodType || 'Wood')} · ${p ? money0(p) + priceLabel() : '—'}</div>
-          <div class="sub">${fmtDate(c.o.date)} · ${esc(partyName(c.o.supplierId))} → ${esc(partyName(c.o.buyerId))}${c.o.logSize ? ' · ' + sizeName(c.o.logSize) : ''}</div></div>
+          <div class="sub">${fmtDate(c.o.date)} · ${esc(partyName(c.o.supplierId))} → ${esc(partyName(c.o.buyerId))}${c.o.logSize ? ' · ' + sizeName(c.o.logSize) : ''}${c.o.logLength ? ' · ' + lengthName(c.o.logLength) : ''}</div></div>
           <div class="amt small">${Math.round(c.sim * 100)}%<div class="sub">alike</div></div></div>`;
       }).join('')}</div></div>` : ''}`;
     bindOrderItems(box);
@@ -239,7 +263,7 @@ function renderPriceCheck(view) {
     $('#pcUse').onclick = () => {
       const perTon = settings.priceUnit === 'ton' ? r.price : r.price * 1000;
       state.prefill = {
-        woodType: r.wood, logSize: pc.logSize, unit: pc.unit,
+        woodType: r.wood, logSize: pc.logSize, logLength: pc.logLength, unit: pc.unit,
         weight: pc.weight === '' ? '' : num(pc.weight),
         rate: round2(pc.unit === 'ton' ? perTon : perTon / 1000),
         woodPhoto: pc.photo, woodFeats: pc.feats,

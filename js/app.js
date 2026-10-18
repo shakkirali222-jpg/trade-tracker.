@@ -581,6 +581,7 @@ async function showOrder(id) {
       <dt>Supplier</dt><dd>${esc(sup?.name || 'Unknown')}${sup?.phone ? ` · <a href="${telLink(sup.phone)}">${esc(sup.phone)}</a>` : ''}</dd>
       <dt>Buyer</dt><dd>${esc(buy?.name || 'Unknown')}${buy?.phone ? ` · <a href="${telLink(buy.phone)}">${esc(buy.phone)}</a>` : ''}</dd>
       ${o.woodType ? `<dt>Wood</dt><dd>${esc(o.woodType)}${o.logSize ? ` · ${sizeName(o.logSize)} logs` : ''}</dd>` : ''}
+      ${o.logLength ? `<dt>Log length</dt><dd>${lengthName(o.logLength)}</dd>` : ''}
       ${o.weight ? `<dt>Weight</dt><dd>${nf.format(num(o.weight))} ${o.unit === 'ton' ? 'ton' : 'kg'}</dd>` : ''}
       ${o.rate ? `<dt>Rate</dt><dd>${money(o.rate)} / ${o.unit === 'ton' ? 'ton' : 'kg'}</dd>` : ''}
       ${kg ? `<dt>Avg price</dt><dd>${money0(pricePer(o.total, kg))}${priceLabel()}</dd>` : ''}
@@ -730,8 +731,9 @@ function renderOrderForm(view, editId) {
   // Coming from Price check: start with its wood, size, weight, price and photo
   const pre = !existing && state.prefill;
   state.prefill = null;
-  if (pre) Object.assign(o, { woodType: pre.woodType, logSize: pre.logSize, unit: pre.unit, weight: pre.weight, rate: pre.rate });
+  if (pre) Object.assign(o, { woodType: pre.woodType, logSize: pre.logSize, logLength: pre.logLength, unit: pre.unit, weight: pre.weight, rate: pre.rate });
   let logSize = o.logSize || '';
+  let logLength = o.logLength ?? (existing ? '' : '8ft'); // normal cut is 8 ft
   // Attachment working state
   const slips = (o.slipIds || []).map((id) => ({ id }));
   const woodPhotos = (o.woodPhotoIds || []).map((id) => ({ id, feats: o.woodFeats?.[id] }));
@@ -776,6 +778,8 @@ function renderOrderForm(view, editId) {
       <div class="field"><label>Log size (girth)</label>
         <div class="seg" id="fSize" style="margin:0">${LOG_SIZES.map(([k, l]) => `<button type="button" data-s="${k}" class="${logSize === k ? 'active' : ''}">${k ? l : '—'}</button>`).join('')}</div>
         <div class="hint">Helps Price check learn how log size affects price.</div></div>
+      <div class="field"><label>Log length</label>
+        <div class="seg" id="fLen" style="margin:0">${LOG_LENGTHS.map(([k, l]) => `<button type="button" data-l="${k}" class="${logLength === k ? 'active' : ''}">${l}</button>`).join('')}</div></div>
 
       <div class="grid2">
         <div class="field"><label for="fWeight">Weight</label>
@@ -963,6 +967,11 @@ function renderOrderForm(view, editId) {
     sel.classList.remove('invalid');
   }));
 
+  $$('#fLen button').forEach((b) => b.onclick = () => {
+    logLength = b.dataset.l;
+    $$('#fLen button').forEach((x) => x.classList.toggle('active', x === b));
+    dirty = true;
+  });
   $$('#fSize button').forEach((b) => b.onclick = () => {
     logSize = b.dataset.s;
     $$('#fSize button').forEach((x) => x.classList.toggle('active', x === b));
@@ -1123,6 +1132,7 @@ function renderOrderForm(view, editId) {
       commission: round2(num(el.comm.value)),
       commissionReceived: el.rec.checked,
       logSize,
+      logLength,
       vehicleNo: el.vehicle.value.trim().toUpperCase(),
       slipNo: el.slipNo.value.trim(),
       notes: el.notes.value.trim(),
@@ -1814,10 +1824,10 @@ async function restore(file) {
 
 function exportCsv() {
   const cell = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-  const head = ['Date', 'Supplier', 'Supplier phone', 'Buyer', 'Buyer phone', 'Wood', 'Weight', 'Unit', 'Rate', 'Total', 'Brokerage %', 'Brokerage', 'Brokerage received', 'Vehicle', 'Slip no', 'Log size', 'Notes'];
+  const head = ['Date', 'Supplier', 'Supplier phone', 'Buyer', 'Buyer phone', 'Wood', 'Weight', 'Unit', 'Rate', 'Total', 'Brokerage %', 'Brokerage', 'Brokerage received', 'Vehicle', 'Slip no', 'Log size', 'Log length', 'Notes'];
   const rows = [...state.orders].sort((a, b) => a.date.localeCompare(b.date)).map((o) => {
     const s = partyById(o.supplierId); const b = partyById(o.buyerId);
-    return [o.date, s?.name, s?.phone, b?.name, b?.phone, o.woodType, o.weight, o.unit, o.rate, o.total, o.commissionPct, o.commission, o.commissionReceived ? 'Yes' : 'No', o.vehicleNo, o.slipNo, sizeName(o.logSize || ''), o.notes];
+    return [o.date, s?.name, s?.phone, b?.name, b?.phone, o.woodType, o.weight, o.unit, o.rate, o.total, o.commissionPct, o.commission, o.commissionReceived ? 'Yes' : 'No', o.vehicleNo, o.slipNo, sizeName(o.logSize || ''), lengthName(o.logLength || ''), o.notes];
   });
   const csv = '﻿' + [head, ...rows].map((r) => r.map(cell).join(',')).join('\r\n');
   download(`log-broker-orders-${todayStr()}.csv`, new Blob([csv], { type: 'text/csv;charset=utf-8' }));

@@ -31,7 +31,7 @@ It is a single-user web app that installs on the phone ("Add to Home screen"), w
 - Take a photo of the logs loaded on the lorry, choose the wood and log size (and weight if you know it). The app suggests a price per ton with a fair range, the load value and your brokerage.
 - It learns from your past orders: wood photos, log size (small / medium / big), weight and the price you agreed. Past loads that look similar, or have the same log size, tell it whether this load should be priced above or below the market.
 - Shows the 3 most similar past loads with their photos and prices. "Create order at this price" opens a new order already filled in.
-- Orders now have a **Wood photos** section and a **Log size** choice so Price check keeps learning.
+- Orders now have a **Wood photos** section, a **Log size** choice and a **Log length** choice (8 ft single – the normal cut – or 2 × 4 ft pieces) so Price check keeps learning.
 
 **Wood prices and price alerts**
 - Reports → Wood prices: price per ton of each wood type by day, week, month or year; lowest and highest price; cheapest suppliers and best-paying buyers for each wood.
