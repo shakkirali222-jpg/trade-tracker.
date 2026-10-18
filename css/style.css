@@ -367,3 +367,18 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .conf { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); white-space: nowrap; }
 .conf-high { background: var(--accent-soft); color: var(--accent); }
 .conf-medium { background: var(--warn-soft); color: var(--warn); }
+.quick { text-decoration: none; color: inherit; }
+.quick > svg { color: var(--muted); }
+.big-thumb { width: 160px; height: 120px; }
+.sim-thumb { width: 64px; height: 56px; flex: none; }
+.price-card { border: 2px solid var(--primary-2); }
+.price-big { font-size: 36px; font-weight: 800; color: var(--primary); margin: 2px 0 4px; }
+.price-big span { font-size: 16px; font-weight: 600; color: var(--muted); margin-left: 4px; }
+.price-total { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; background: var(--surface-2); border-radius: 12px; padding: 10px 12px; }
+.price-total > div { display: flex; flex-direction: column; }
+.price-total b { font-size: 18px; }
+.why-list { list-style: none; padding: 0; margin: 12px 0 0; font-size: 13px; }
+.why-list li { display: flex; justify-content: space-between; gap: 10px; padding: 7px 0; border-top: 1px dashed var(--border); }
+.why-list li > span { color: var(--muted); }
+.why-list li > span b { color: var(--text); }
+.why-list li > b { white-space: nowrap; }

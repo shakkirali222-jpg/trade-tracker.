@@ -292,6 +292,7 @@ const ROUTES = {
   parties: { title: () => 'Suppliers & Buyers', render: renderParties },
   reports: { title: () => 'Reports', render: renderReports },
   settings: { title: () => 'Settings', render: renderSettings, back: true },
+  price: { title: () => 'Price check', render: renderPriceCheck, back: true },
 };
 let currentRoute = '';
 let leaveGuard = null;
@@ -365,6 +366,11 @@ function renderHome(view) {
 
   view.innerHTML = `
     ${backupDue ? `<div class="banner">${ICON.alert}<div class="grow">Your data lives only on this phone. Take a backup regularly.</div><a class="btn sm" href="#settings">Backup</a></div>` : ''}
+    <a class="card item quick" href="#price">
+      <div class="avatar" style="background:var(--primary);color:var(--on-primary)">${ICON.camera}</div>
+      <div class="main"><div class="title">Price check</div><div class="sub">Photo of the load → suggested price ${priceLabel()}</div></div>
+      ${ICON.right}
+    </a>
     <div class="seg" id="dashUnit">
       ${['day', 'week', 'month', 'year'].map((u) => `<button data-u="${u}" class="${u === unit ? 'active' : ''}">${u[0].toUpperCase() + u.slice(1)}</button>`).join('')}
     </div>
@@ -574,7 +580,7 @@ async function showOrder(id) {
     <dl class="detail-rows">
       <dt>Supplier</dt><dd>${esc(sup?.name || 'Unknown')}${sup?.phone ? ` · <a href="${telLink(sup.phone)}">${esc(sup.phone)}</a>` : ''}</dd>
       <dt>Buyer</dt><dd>${esc(buy?.name || 'Unknown')}${buy?.phone ? ` · <a href="${telLink(buy.phone)}">${esc(buy.phone)}</a>` : ''}</dd>
-      ${o.woodType ? `<dt>Wood</dt><dd>${esc(o.woodType)}</dd>` : ''}
+      ${o.woodType ? `<dt>Wood</dt><dd>${esc(o.woodType)}${o.logSize ? ` · ${sizeName(o.logSize)} logs` : ''}</dd>` : ''}
       ${o.weight ? `<dt>Weight</dt><dd>${nf.format(num(o.weight))} ${o.unit === 'ton' ? 'ton' : 'kg'}</dd>` : ''}
       ${o.rate ? `<dt>Rate</dt><dd>${money(o.rate)} / ${o.unit === 'ton' ? 'ton' : 'kg'}</dd>` : ''}
       ${kg ? `<dt>Avg price</dt><dd>${money0(pricePer(o.total, kg))}${priceLabel()}</dd>` : ''}
@@ -596,6 +602,12 @@ async function showOrder(id) {
   const filesBox = $('#detailFiles', body);
   let html = '';
   const slips = (await Promise.all((o.slipIds || []).map((fid) => DB.get('files', fid)))).filter(Boolean);
+  const woodPics = (await Promise.all((o.woodPhotoIds || []).map((fid) => DB.get('files', fid)))).filter(Boolean);
+  if (woodPics.length) {
+    html += `<div class="section-title">Wood photos</div><div class="thumbs" style="margin-bottom:14px">`;
+    woodPics.forEach((f) => { const u = blobUrl(f.blob); html += `<div class="thumb" data-img="${u}"><img src="${u}" alt="Wood load"></div>`; });
+    html += '</div>';
+  }
   if (slips.length) {
     html += `<div class="section-title">Weight slip${slips.length > 1 ? 's' : ''}</div><div class="thumbs" style="margin-bottom:14px">`;
     slips.forEach((f) => {
@@ -657,7 +669,7 @@ async function shareOrder(o, slips) {
 }
 
 async function deleteOrder(o) {
-  for (const fid of [...(o.slipIds || []), o.audioId].filter(Boolean)) await DB.del('files', fid);
+  for (const fid of [...(o.slipIds || []), ...(o.woodPhotoIds || []), o.audioId].filter(Boolean)) await DB.del('files', fid);
   await DB.del('orders', o.id);
   state.orders = state.orders.filter((x) => x.id !== o.id);
 }
@@ -715,8 +727,15 @@ function renderOrderForm(view, editId) {
     rate: '', total: '', commissionPct: settings.commissionPct, commissionReceived: false, vehicleNo: '', slipNo: '', notes: '',
     slipIds: [], audioId: null,
   };
+  // Coming from Price check: start with its wood, size, weight, price and photo
+  const pre = !existing && state.prefill;
+  state.prefill = null;
+  if (pre) Object.assign(o, { woodType: pre.woodType, logSize: pre.logSize, unit: pre.unit, weight: pre.weight, rate: pre.rate });
+  let logSize = o.logSize || '';
   // Attachment working state
   const slips = (o.slipIds || []).map((id) => ({ id }));
+  const woodPhotos = (o.woodPhotoIds || []).map((id) => ({ id, feats: o.woodFeats?.[id] }));
+  if (pre?.woodPhoto) woodPhotos.push({ blob: pre.woodPhoto, feats: pre.woodFeats, name: 'wood-load.jpg' });
   const removedFiles = [];
   let audio = o.audioId ? { id: o.audioId } : null;
   let totalManual = !!existing && !(num(o.weight) && num(o.rate));
@@ -754,6 +773,9 @@ function renderOrderForm(view, editId) {
         <div class="label-row"><label for="fWood">Wood type</label><button type="button" class="btn sm ghost" id="addWood">${ICON.plus} New</button></div>
         <select class="input" id="fWood">${woodOpts(o.woodType)}</select>
       </div>
+      <div class="field"><label>Log size (girth)</label>
+        <div class="seg" id="fSize" style="margin:0">${LOG_SIZES.map(([k, l]) => `<button type="button" data-s="${k}" class="${logSize === k ? 'active' : ''}">${k ? l : '—'}</button>`).join('')}</div>
+        <div class="hint">Helps Price check learn how log size affects price.</div></div>
 
       <div class="grid2">
         <div class="field"><label for="fWeight">Weight</label>
@@ -790,6 +812,14 @@ function renderOrderForm(view, editId) {
       <div class="grid2">
         <div class="field"><label for="fVehicle">Vehicle no.</label><input class="input" id="fVehicle" value="${esc(o.vehicleNo)}" placeholder="KL 10 AB 1234" autocapitalize="characters"></div>
         <div class="field"><label for="fSlipNo">Weight slip no.</label><input class="input" id="fSlipNo" value="${esc(o.slipNo)}" placeholder="Optional"></div>
+      </div>
+
+      <div class="field">
+        <label>Wood photos (logs loaded on the vehicle)</label>
+        <div class="thumbs" id="woodThumbs"></div>
+        <input type="file" id="woodInput" accept="image/*" multiple hidden>
+        <input type="file" id="woodCamera" accept="image/*" capture="environment" hidden>
+        <div class="hint">Used by Price check to compare future loads with this one.</div>
       </div>
 
       <div class="field">
@@ -933,46 +963,58 @@ function renderOrderForm(view, editId) {
     sel.classList.remove('invalid');
   }));
 
-  // ---- Weight slips ----
-  async function drawSlips() {
-    const box = $('#slipThumbs');
-    let html = '';
-    for (let i = 0; i < slips.length; i++) {
-      const s = slips[i];
-      if (!s.blob && s.id) { const rec = await DB.get('files', s.id); s.blob = rec?.blob; s.name = rec?.name; }
-      if (!s.blob) continue;
-      if (!s.url) s.url = blobUrl(s.blob);
-      html += `<div class="thumb" data-i="${i}">${s.blob.type.startsWith('image/') ? `<img src="${s.url}" alt="Weight slip">` : `${ICON.file}`}
-        <button type="button" class="x" data-rm="${i}" aria-label="Remove">${ICON.x}</button></div>`;
-    }
-    html += `<button type="button" class="thumb add" id="addCam">${ICON.camera}<span>Camera</span></button>`;
-    html += `<button type="button" class="thumb add" id="addFile">${ICON.upload}<span>Gallery</span></button>`;
-    box.innerHTML = html;
-    $('#addCam').onclick = () => $('#slipCamera').click();
-    $('#addFile').onclick = () => $('#slipInput').click();
-    $$('[data-rm]', box).forEach((b) => b.onclick = (e) => {
-      e.stopPropagation();
-      const [s] = slips.splice(Number(b.dataset.rm), 1);
-      if (s.id) removedFiles.push(s.id);
-      dirty = true;
-      drawSlips();
-    });
-    $$('.thumb[data-i]', box).forEach((t) => t.onclick = () => {
-      const s = slips[Number(t.dataset.i)];
-      if (s.blob.type.startsWith('image/')) openLightbox(s.url); else window.open(s.url, '_blank');
-    });
-  }
-  async function addSlipFiles(files) {
-    for (const file of files) {
-      const blob = file.type.startsWith('image/') ? await compressImage(file) : file;
-      slips.push({ blob, name: file.name });
-    }
+  $$('#fSize button').forEach((b) => b.onclick = () => {
+    logSize = b.dataset.s;
+    $$('#fSize button').forEach((x) => x.classList.toggle('active', x === b));
     dirty = true;
-    drawSlips();
+  });
+
+  // ---- Photo fields (weight slips, wood photos) ----
+  function photoField({ list, box, cam, gal, alt }) {
+    async function draw() {
+      const host = $(box);
+      if (!host) return;
+      let html = '';
+      for (let i = 0; i < list.length; i++) {
+        const s = list[i];
+        if (!s.blob && s.id) { const rec = await DB.get('files', s.id); s.blob = rec?.blob; s.name = rec?.name; }
+        if (!s.blob) continue;
+        if (!s.url) s.url = blobUrl(s.blob);
+        html += `<div class="thumb" data-i="${i}">${s.blob.type.startsWith('image/') ? `<img src="${s.url}" alt="${alt}">` : `${ICON.file}`}
+          <button type="button" class="x" data-rm="${i}" aria-label="Remove">${ICON.x}</button></div>`;
+      }
+      html += `<button type="button" class="thumb add" data-add="cam">${ICON.camera}<span>Camera</span></button>`;
+      html += `<button type="button" class="thumb add" data-add="gal">${ICON.upload}<span>Gallery</span></button>`;
+      host.innerHTML = html;
+      $('[data-add=cam]', host).onclick = () => $(cam).click();
+      $('[data-add=gal]', host).onclick = () => $(gal).click();
+      $$('[data-rm]', host).forEach((b) => b.onclick = (e) => {
+        e.stopPropagation();
+        const [s] = list.splice(Number(b.dataset.rm), 1);
+        if (s.id) removedFiles.push(s.id);
+        dirty = true;
+        draw();
+      });
+      $$('.thumb[data-i]', host).forEach((t) => t.onclick = () => {
+        const s = list[Number(t.dataset.i)];
+        if (s.blob.type.startsWith('image/')) openLightbox(s.url); else window.open(s.url, '_blank');
+      });
+    }
+    async function add(files) {
+      for (const file of files) {
+        const blob = file.type.startsWith('image/') ? await compressImage(file) : file;
+        list.push({ blob, name: file.name });
+      }
+      dirty = true;
+      draw();
+    }
+    $(gal).onchange = (e) => { add([...e.target.files]); e.target.value = ''; };
+    $(cam).onchange = (e) => { add([...e.target.files]); e.target.value = ''; };
+    draw();
+    return draw;
   }
-  $('#slipInput').onchange = (e) => { addSlipFiles([...e.target.files]); e.target.value = ''; };
-  $('#slipCamera').onchange = (e) => { addSlipFiles([...e.target.files]); e.target.value = ''; };
-  drawSlips();
+  const drawSlips = photoField({ list: slips, box: '#slipThumbs', cam: '#slipCamera', gal: '#slipInput', alt: 'Weight slip' });
+  photoField({ list: woodPhotos, box: '#woodThumbs', cam: '#woodCamera', gal: '#woodInput', alt: 'Wood load' });
 
   // ---- Voice note ----
   const recorder = createRecorder();
@@ -1080,6 +1122,7 @@ function renderOrderForm(view, editId) {
       commissionPct: num(el.pct.value),
       commission: round2(num(el.comm.value)),
       commissionReceived: el.rec.checked,
+      logSize,
       vehicleNo: el.vehicle.value.trim().toUpperCase(),
       slipNo: el.slipNo.value.trim(),
       notes: el.notes.value.trim(),
@@ -1092,6 +1135,19 @@ function renderOrderForm(view, editId) {
       const id = uid();
       await DB.put('files', { id, blob: s.blob, name: s.name || 'slip', orderId: order.id, createdAt: now });
       order.slipIds.push(id);
+    }
+    order.woodPhotoIds = [];
+    order.woodFeats = {};
+    for (const w of woodPhotos) {
+      let id = w.id;
+      if (!id) {
+        id = uid();
+        await DB.put('files', { id, blob: w.blob, name: w.name || 'wood-load', orderId: order.id, kind: 'wood', createdAt: now });
+      }
+      order.woodPhotoIds.push(id);
+      let feats = w.feats;
+      if (!feats && w.blob) { try { feats = await imageFeatures(w.blob); } catch { feats = null; } }
+      if (feats) order.woodFeats[id] = feats;
     }
     order.audioId = null;
     if (audio) {
@@ -1758,10 +1814,10 @@ async function restore(file) {
 
 function exportCsv() {
   const cell = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-  const head = ['Date', 'Supplier', 'Supplier phone', 'Buyer', 'Buyer phone', 'Wood', 'Weight', 'Unit', 'Rate', 'Total', 'Brokerage %', 'Brokerage', 'Brokerage received', 'Vehicle', 'Slip no', 'Notes'];
+  const head = ['Date', 'Supplier', 'Supplier phone', 'Buyer', 'Buyer phone', 'Wood', 'Weight', 'Unit', 'Rate', 'Total', 'Brokerage %', 'Brokerage', 'Brokerage received', 'Vehicle', 'Slip no', 'Log size', 'Notes'];
   const rows = [...state.orders].sort((a, b) => a.date.localeCompare(b.date)).map((o) => {
     const s = partyById(o.supplierId); const b = partyById(o.buyerId);
-    return [o.date, s?.name, s?.phone, b?.name, b?.phone, o.woodType, o.weight, o.unit, o.rate, o.total, o.commissionPct, o.commission, o.commissionReceived ? 'Yes' : 'No', o.vehicleNo, o.slipNo, o.notes];
+    return [o.date, s?.name, s?.phone, b?.name, b?.phone, o.woodType, o.weight, o.unit, o.rate, o.total, o.commissionPct, o.commission, o.commissionReceived ? 'Yes' : 'No', o.vehicleNo, o.slipNo, sizeName(o.logSize || ''), o.notes];
   });
   const csv = '﻿' + [head, ...rows].map((r) => r.map(cell).join(',')).join('\r\n');
   download(`log-broker-orders-${todayStr()}.csv`, new Blob([csv], { type: 'text/csv;charset=utf-8' }));

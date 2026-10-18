@@ -27,6 +27,12 @@ It is a single-user web app that installs on the phone ("Add to Home screen"), w
 - Reports per supplier or buyer: sales and average price per ton over time (daily, weekly, monthly or yearly, any date range); who they traded with; their order list.
 - Compare all suppliers or all buyers: price trend lines, stacked sales and a ranking table.
 
+**Price check**
+- Take a photo of the logs loaded on the lorry, choose the wood and log size (and weight if you know it). The app suggests a price per ton with a fair range, the load value and your brokerage.
+- It learns from your past orders: wood photos, log size (small / medium / big), weight and the price you agreed. Past loads that look similar, or have the same log size, tell it whether this load should be priced above or below the market.
+- Shows the 3 most similar past loads with their photos and prices. "Create order at this price" opens a new order already filled in.
+- Orders now have a **Wood photos** section and a **Log size** choice so Price check keeps learning.
+
 **Wood prices and price alerts**
 - Reports → Wood prices: price per ton of each wood type by day, week, month or year; lowest and highest price; cheapest suppliers and best-paying buyers for each wood.
 - Price outlook from the first bills: for each wood the app predicts the price for the next 3 weeks, plus 6 and 10 months ahead, with a confidence level and a "Why?" breakdown:
@@ -61,6 +67,7 @@ To use it on a phone, host the folder on any HTTPS static host (for example GitH
 - `js/app.js` – screens, charts, voice, backup
 - `sw.js`, `manifest.webmanifest`, `icons/` – install and offline support
 - `js/smart.js` – weight slip scanning and price outlook
+- `js/pricing.js` – Price check (photo fingerprints and price suggestion)
 - `vendor/chart.umd.js` – Chart.js 4.4.6 (MIT), bundled so charts work offline
 - `vendor/ocr/` – Tesseract.js 5.1.1 + English data (Apache 2.0), used for slip scanning
 
