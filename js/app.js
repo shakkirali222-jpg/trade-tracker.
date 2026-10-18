@@ -292,7 +292,7 @@ const ROUTES = {
   parties: { title: () => 'Suppliers & Buyers', render: renderParties },
   reports: { title: () => 'Reports', render: renderReports },
   settings: { title: () => 'Settings', render: renderSettings, back: true },
-  price: { title: () => 'Price check', render: renderPriceCheck, back: true },
+  price: { title: () => 'Price check', render: renderPriceCheck },
 };
 let currentRoute = '';
 let leaveGuard = null;
@@ -366,11 +366,6 @@ function renderHome(view) {
 
   view.innerHTML = `
     ${backupDue ? `<div class="banner">${ICON.alert}<div class="grow">Your data lives only on this phone. Take a backup regularly.</div><a class="btn sm" href="#settings">Backup</a></div>` : ''}
-    <a class="card item quick" href="#price">
-      <div class="avatar" style="background:var(--primary);color:var(--on-primary)">${ICON.camera}</div>
-      <div class="main"><div class="title">Price check</div><div class="sub">Photo of the load → suggested price ${priceLabel()}</div></div>
-      ${ICON.right}
-    </a>
     <div class="seg" id="dashUnit">
       ${['day', 'week', 'month', 'year'].map((u) => `<button data-u="${u}" class="${u === unit ? 'active' : ''}">${u[0].toUpperCase() + u.slice(1)}</button>`).join('')}
     </div>
