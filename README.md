@@ -29,7 +29,12 @@ It is a single-user web app that installs on the phone ("Add to Home screen"), w
 
 **Wood prices and price alerts**
 - Reports → Wood prices: price per ton of each wood type by day, week, month or year; lowest and highest price; cheapest suppliers and best-paying buyers for each wood.
-- After 1 year of orders, the app predicts whether each wood's price may go up or down in the next 2–3 weeks. The forecast uses how prices moved at the same time in earlier years plus the last 4 weeks' trend. It shows on the Home page and, if turned on, as a phone notification.
+- Price outlook from the first bills: for each wood the app predicts the price for the next 3 weeks, plus 6 and 10 months ahead, with a confidence level and a "Why?" breakdown:
+  - **Your bills** – recent price trend in your bills (weighted by tonnage, newer bills count more).
+  - **Season** – the usual Kerala log cycle (dry Jan–Mar = most felling and lower prices; monsoon Jun–Sep and Oct–Nov rains = felling and transport stop, higher prices). After a year it also uses your own last-year pattern.
+  - **Weather** – rain forecast for your area (Open-Meteo). More rainy days than usual pushes prices up. The app also checks past rain against your bills to learn how much rain really moved your prices.
+  - **Yearly rise** – normal slow rise (5%/year to start; learned from your bills after 6 months).
+- Shown on Home and Reports; optional daily phone notification.
 
 **Everyday things**
 - Supplier/buyer contacts with Call and WhatsApp buttons.

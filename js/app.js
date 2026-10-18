@@ -310,6 +310,13 @@ function route() {
   view.innerHTML = '';
   window.scrollTo(0, 0);
   r.render(view, arg && decodeURIComponent(arg));
+  // Price outlook uses the rain forecast; redraw once when fresh weather arrives.
+  if (name === 'home' || name === 'reports' || !ROUTES[name]) {
+    ensureWeather().then((changed) => {
+      if (!changed || currentRoute !== name || !$('#sheet').hidden) return;
+      const y = window.scrollY; route(); window.scrollTo(0, y);
+    });
+  }
 }
 window.addEventListener('hashchange', route);
 $('#backBtn').addEventListener('click', () => { if (history.length > 1) history.back(); else location.hash = '#home'; });
@@ -376,7 +383,7 @@ function renderHome(view) {
       <h3>Sales & brokerage <small>${{ day: 'last 14 days', week: 'last 12 weeks', month: 'last 12 months', year: 'last 6 years' }[unit]}</small></h3>
       <div class="chart-box"><canvas id="dashChart"></canvas></div>
     </div>
-    ${outlookCard(usedWoods(), { onlyMoves: true })}
+    ${outlookCard(usedWoods(), { limit: 4 })}
     <a class="card item" href="#orders" id="pendingCard" style="text-decoration:none;color:inherit">
       <div class="avatar" style="color:var(--warn)">${ICON.alert}</div>
       <div class="main"><div class="title">Brokerage to collect</div><div class="sub">${all.pendingCount} order${all.pendingCount === 1 ? '' : 's'} not yet received · all time</div></div>
@@ -1540,7 +1547,7 @@ function renderWoodReport(body, unit, bStart, nB, ranged) {
       <div class="kpi"><div class="label">Lowest</div><div class="value">${ps.length ? money0(Math.min(...ps)) : '—'}</div></div>
       <div class="kpi"><div class="label">Highest</div><div class="value">${ps.length ? money0(Math.max(...ps)) : '—'}</div></div>
     </div>
-    ${outlookCard([wood], { title: `${esc(wood)} · next 2–3 weeks` })}
+    ${outlookCard([wood], { title: `${esc(wood)} · price outlook` })}
     <div class="card"><h3>${esc(wood)} price over time</h3><div class="chart-box tall"><canvas id="cWood1"></canvas></div></div>
     <div class="card"><h3>Suppliers <small>cheapest first</small></h3>${priceList(bySup, 'Average price you got this wood from each supplier.')}</div>
     <div class="card"><h3>Buyers <small>best paying first</small></h3>${priceList(byBuy, 'Average price each company paid for this wood.')}</div>`;
@@ -1609,7 +1616,11 @@ function renderSettings(view) {
 
     <div class="card">
       <h3>Price alerts</h3>
-      <div class="switch-row" style="padding-top:0"><span>Notify me when wood prices may go up or down<br><span class="small muted">Starts after 1 year of orders. Checked each day when you open the app.</span></span>
+      <div class="field"><label for="sLoc">Your area (for rain forecast)</label>
+        <div class="input-group"><input class="input" id="sLoc" value="${esc(myLoc().name)}" placeholder="Town name"><button class="btn" id="sLocFind">Set</button></div>
+        <button class="btn sm ghost" id="sLocGps" style="margin-top:6px">📍 Use my current location</button>
+        <div class="hint">Rain stops felling and transport, so it affects log prices. Forecast from Open-Meteo.</div></div>
+      <div class="switch-row" style="padding-top:0"><span>Notify me when wood prices may go up or down<br><span class="small muted">Checked once a day when you open the app.</span></span>
         <label class="switch"><input type="checkbox" id="sAlerts" ${settings.priceAlerts ? 'checked' : ''}><span></span></label></div>
       ${'Notification' in window ? '' : '<p class="small muted" style="margin:0">On iPhone, phone notifications work only when the app is opened from its Home Screen icon. Alerts still show on the Home page.</p>'}
     </div>
@@ -1645,6 +1656,30 @@ function renderSettings(view) {
     toast(`${b.dataset.rmwood} removed from the list`);
     route();
   });
+  const setLoc = (l) => {
+    settings.location = l; saveSettings();
+    ['lb-weather', 'lb-rainhist'].forEach((k) => { try { localStorage.removeItem(k); } catch { /* ignore */ } });
+    ensureWeather(true);
+    toast(`Area set to ${l.name}`);
+    route();
+  };
+  $('#sLocFind').onclick = async () => {
+    const q = $('#sLoc').value.trim();
+    if (!q) return;
+    try {
+      const r = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(q)}&count=5&language=en`);
+      const j = await r.json();
+      const hit = (j.results || []).sort((a, b) => (b.country_code === 'IN') - (a.country_code === 'IN'))[0];
+      if (!hit) { toast('Place not found – try a nearby town'); return; }
+      setLoc({ name: hit.name + (hit.admin1 ? ', ' + hit.admin1 : ''), lat: hit.latitude, lon: hit.longitude });
+    } catch { toast('Needs internet to find the place'); }
+  };
+  $('#sLocGps').onclick = () => {
+    if (!navigator.geolocation) { toast('Location not available'); return; }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => setLoc({ name: 'My area', lat: pos.coords.latitude, lon: pos.coords.longitude }),
+      () => toast('Location permission was denied'), { timeout: 15000 });
+  };
   $('#sAlerts').onchange = async (e) => {
     const want = e.target.checked;
     if (want && 'Notification' in window && Notification.permission !== 'granted') {
@@ -1788,5 +1823,5 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
     return;
   }
   route();
-  setTimeout(maybeNotifyOutlook, 1500);
+  ensureWeather().finally(() => setTimeout(maybeNotifyOutlook, 500));
 })();
