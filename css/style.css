@@ -386,3 +386,8 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .side-slot { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); text-align: center; }
 .side-thumb { width: 100%; height: auto; aspect-ratio: 4 / 3; }
 .hint-banner { background: var(--accent-soft); }
+.counter { position: relative; border-radius: 12px; overflow: hidden; touch-action: manipulation; cursor: crosshair; }
+.counter img { display: block; width: 100%; height: auto; }
+.counter .dots { position: absolute; inset: 0; }
+.counter .dot { position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; background: #18a558; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.4); }
+.count-big { font-size: 28px; font-weight: 800; color: var(--primary); }

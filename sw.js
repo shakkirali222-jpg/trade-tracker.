@@ -1,5 +1,5 @@
 // Offline support: cache the app shell, serve it when there is no network.
-const CACHE = 'log-broker-v6';
+const CACHE = 'log-broker-v7';
 const ASSETS = [
   './', './index.html', './css/style.css', './js/db.js', './js/smart.js', './js/pricing.js', './js/app.js', './vendor/chart.umd.js',
   './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/maskable-512.png',

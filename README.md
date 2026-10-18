@@ -28,11 +28,11 @@ It is a single-user web app that installs on the phone ("Add to Home screen"), w
 - Compare all suppliers or all buyers: price trend lines, stacked sales and a ranking table.
 
 **Price check**
-- Take 3 photos of the loaded lorry (left side, right side, back with the cut ends), choose the wood, log size (and weight if you know it). The app suggests a price per ton with a fair range, the load value and your brokerage.
-- It learns from your past orders: wood photos, log size (small / medium / big), weight and the price you agreed. Each photo is compared with the same side of past loads; loads that look similar, or have the same log size, tell it whether this load should be priced above or below the market.
-- If similar past loads were mostly one log size, it suggests that size.
-- Shows the 3 most similar past loads with their photos and prices. "Create order at this price" opens a new order already filled in.
-- Orders now have a **Wood photos** section, a **Log size** choice and a **Log length** choice (8 ft single – the normal cut – or 2 × 4 ft pieces) so Price check keeps learning.
+- Take 3 photos of the loaded lorry (left side, right side, back with the cut ends), choose the wood and enter the weight.
+- **Log count:** the app counts the cut ends in the back photo automatically and shows a dot on each log; tap to add a missed log or remove a wrong dot. Weight ÷ number of logs = **average log weight** (kg per log), which shows how thick the logs are.
+- The app suggests a price per ton with a fair range, load value and your brokerage. It learns from your past orders: loads with similar kg-per-log, log length (8 ft single or 2 × 4 ft), similar-looking photos (each side compared with the same side), plus today's market rate from your latest bills.
+- Shows the most similar past loads and the latest bills for that wood. "Create order at this price" opens a new order already filled in.
+- Orders have the 3 wood photos, number of logs and log length, so Price check keeps learning.
 
 **Wood prices and price alerts**
 - Reports → Wood prices: price per ton of each wood type by day, week, month or year; lowest and highest price; cheapest suppliers and best-paying buyers for each wood.

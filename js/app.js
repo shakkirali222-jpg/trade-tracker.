@@ -581,6 +581,7 @@ async function showOrder(id) {
       <dt>Supplier</dt><dd>${esc(sup?.name || 'Unknown')}${sup?.phone ? ` · <a href="${telLink(sup.phone)}">${esc(sup.phone)}</a>` : ''}</dd>
       <dt>Buyer</dt><dd>${esc(buy?.name || 'Unknown')}${buy?.phone ? ` · <a href="${telLink(buy.phone)}">${esc(buy.phone)}</a>` : ''}</dd>
       ${o.woodType ? `<dt>Wood</dt><dd>${esc(o.woodType)}${o.logSize ? ` · ${sizeName(o.logSize)} logs` : ''}</dd>` : ''}
+      ${num(o.logCount) ? `<dt>Logs</dt><dd>${o.logCount}${kg ? ` · avg ${nf.format(Math.round(kg / num(o.logCount)))} kg/log` : ''}</dd>` : ''}
       ${o.logLength ? `<dt>Log length</dt><dd>${lengthName(o.logLength)}</dd>` : ''}
       ${o.weight ? `<dt>Weight</dt><dd>${nf.format(num(o.weight))} ${o.unit === 'ton' ? 'ton' : 'kg'}</dd>` : ''}
       ${o.rate ? `<dt>Rate</dt><dd>${money(o.rate)} / ${o.unit === 'ton' ? 'ton' : 'kg'}</dd>` : ''}
@@ -735,8 +736,9 @@ function renderOrderForm(view, editId) {
   // Coming from Price check: start with its wood, size, weight, price and photo
   const pre = !existing && state.prefill;
   state.prefill = null;
-  if (pre) Object.assign(o, { woodType: pre.woodType, logSize: pre.logSize, logLength: pre.logLength, unit: pre.unit, weight: pre.weight, rate: pre.rate });
-  let logSize = o.logSize || '';
+  if (pre) Object.assign(o, { woodType: pre.woodType, logCount: pre.logCount, logDots: pre.logDots, logLength: pre.logLength, unit: pre.unit, weight: pre.weight, rate: pre.rate });
+  const logSize = o.logSize || ''; // older orders only
+  const logSt = { count: o.logCount || '', dots: o.logDots || null };
   let logLength = o.logLength ?? (existing ? '' : '8ft'); // normal cut is 8 ft
   // Attachment working state
   const slips = (o.slipIds || []).map((id) => ({ id }));
@@ -786,9 +788,6 @@ function renderOrderForm(view, editId) {
         <div class="label-row"><label for="fWood">Wood type</label><button type="button" class="btn sm ghost" id="addWood">${ICON.plus} New</button></div>
         <select class="input" id="fWood">${woodOpts(o.woodType)}</select>
       </div>
-      <div class="field"><label>Log size (girth)</label>
-        <div class="seg" id="fSize" style="margin:0">${LOG_SIZES.map(([k, l]) => `<button type="button" data-s="${k}" class="${logSize === k ? 'active' : ''}">${k ? l : '—'}</button>`).join('')}</div>
-        <div class="hint">Small = thin logs, Big = thick logs. Thick logs usually get a better price per ton – Price check learns how much.</div></div>
       <div class="field"><label>Log length</label>
         <div class="seg" id="fLen" style="margin:0">${LOG_LENGTHS.map(([k, l]) => `<button type="button" data-l="${k}" class="${logLength === k ? 'active' : ''}">${l}</button>`).join('')}</div></div>
 
@@ -837,6 +836,7 @@ function renderOrderForm(view, editId) {
         <input type="file" id="woodCamera" accept="image/*" capture="environment" hidden>
         <div class="hint">Left side, right side and back (cut ends). Price check compares future loads with these.</div>
       </div>
+      <div class="field" id="fLogs"></div>
 
       <div class="field">
         <label>Weight slip photo</label>
@@ -984,12 +984,6 @@ function renderOrderForm(view, editId) {
     $$('#fLen button').forEach((x) => x.classList.toggle('active', x === b));
     dirty = true;
   });
-  $$('#fSize button').forEach((b) => b.onclick = () => {
-    logSize = b.dataset.s;
-    $$('#fSize button').forEach((x) => x.classList.toggle('active', x === b));
-    dirty = true;
-  });
-
   // ---- Photo fields (weight slips, wood photos) ----
   function photoField({ list, box, cam, gal, alt }) {
     async function draw() {
@@ -1035,7 +1029,19 @@ function renderOrderForm(view, editId) {
     return draw;
   }
   const drawSlips = photoField({ list: slips, box: '#slipThumbs', cam: '#slipCamera', gal: '#slipInput', alt: 'Weight slip' });
-  sidePhotoSlots($('#woodSlots'), woodSlots, { onChange: () => { dirty = true; }, removed: removedFiles });
+  const formKg = () => (el.unit.value === 'ton' ? num(el.weight.value) * 1000 : num(el.weight.value));
+  const logsField = logCountField($('#fLogs'), logSt, { getBack: () => woodSlots.back, getKg: formKg, onChange: () => { dirty = true; } });
+  [el.weight, el.unit].forEach((i) => i.addEventListener('input', () => logsField.update()));
+  el.unit.addEventListener('change', () => logsField.update());
+  let lastBack = woodSlots.back;
+  sidePhotoSlots($('#woodSlots'), woodSlots, {
+    onChange: () => {
+      dirty = true;
+      if (woodSlots.back && woodSlots.back !== lastBack) { logSt.count = ''; logSt.dots = null; logsField.autoCount(woodSlots.back.blob); }
+      lastBack = woodSlots.back;
+    },
+    removed: removedFiles,
+  });
   if (woodOther.length) photoField({ list: woodOther, box: '#woodThumbs', cam: '#woodCamera', gal: '#woodInput', alt: 'Wood load' });
 
   // ---- Voice note ----
@@ -1145,6 +1151,8 @@ function renderOrderForm(view, editId) {
       commission: round2(num(el.comm.value)),
       commissionReceived: el.rec.checked,
       logSize,
+      logCount: logSt.count === '' ? '' : num(logSt.count),
+      logDots: logSt.dots || null,
       logLength,
       vehicleNo: el.vehicle.value.trim().toUpperCase(),
       slipNo: el.slipNo.value.trim(),
@@ -1841,10 +1849,10 @@ async function restore(file) {
 
 function exportCsv() {
   const cell = (v) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-  const head = ['Date', 'Supplier', 'Supplier phone', 'Buyer', 'Buyer phone', 'Wood', 'Weight', 'Unit', 'Rate', 'Total', 'Brokerage %', 'Brokerage', 'Brokerage received', 'Vehicle', 'Slip no', 'Log size', 'Log length', 'Notes'];
+  const head = ['Date', 'Supplier', 'Supplier phone', 'Buyer', 'Buyer phone', 'Wood', 'Weight', 'Unit', 'Rate', 'Total', 'Brokerage %', 'Brokerage', 'Brokerage received', 'Vehicle', 'Slip no', 'Logs', 'Avg kg per log', 'Log length', 'Notes'];
   const rows = [...state.orders].sort((a, b) => a.date.localeCompare(b.date)).map((o) => {
     const s = partyById(o.supplierId); const b = partyById(o.buyerId);
-    return [o.date, s?.name, s?.phone, b?.name, b?.phone, o.woodType, o.weight, o.unit, o.rate, o.total, o.commissionPct, o.commission, o.commissionReceived ? 'Yes' : 'No', o.vehicleNo, o.slipNo, sizeName(o.logSize || ''), lengthName(o.logLength || ''), o.notes];
+    return [o.date, s?.name, s?.phone, b?.name, b?.phone, o.woodType, o.weight, o.unit, o.rate, o.total, o.commissionPct, o.commission, o.commissionReceived ? 'Yes' : 'No', o.vehicleNo, o.slipNo, o.logCount || '', num(o.logCount) && orderKg(o) ? Math.round(orderKg(o) / num(o.logCount)) : '', lengthName(o.logLength || ''), o.notes];
   });
   const csv = '﻿' + [head, ...rows].map((r) => r.map(cell).join(',')).join('\r\n');
   download(`log-broker-orders-${todayStr()}.csv`, new Blob([csv], { type: 'text/csv;charset=utf-8' }));

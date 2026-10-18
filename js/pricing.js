@@ -156,7 +156,7 @@ function orderPremium(o) {
 }
 const mean = (a) => a.reduce((x, y) => x + y, 0) / (a.length || 1);
 
-function priceSuggestion({ wood, logSize, logLength, photos }) {
+function priceSuggestion({ wood, logLength, photos, kgPerLog }) {
   const query = {};
   for (const [side] of WOOD_SIDES) if (photos?.[side]?.feats) query[side] = photos[side].feats;
   const nSides = Object.keys(query).length;
@@ -168,14 +168,20 @@ function priceSuggestion({ wood, logSize, logLength, photos }) {
   const base = ol.current;
   factors.push({ icon: '🧾', label: 'Market now', text: `${wood} from your recent bills`, value: money0(base) + priceLabel() });
 
-  // Log size: how did past loads of this size sell compared with the market?
-  let sizeP = 0; let sizeN = 0;
-  if (logSize) {
-    const L = learnPremium('logSize', logSize, wood);
-    sizeP = L.p; sizeN = L.n;
-    factors.push(L.n
-      ? { icon: '📏', label: `${sizeName(logSize)} logs`, text: `${L.n} past ${sizeName(logSize).toLowerCase()} load${L.n === 1 ? '' : 's'} (${L.scope}) sold ${sgn(L.avg * 100)} vs market`, pct: sizeP * 100 }
-      : { icon: '📏', label: `${sizeName(logSize)} logs`, text: 'No past orders with this log size yet – mark log size on your orders to learn', pct: 0 });
+  // Log thickness: average weight per log (weight ÷ number of logs) vs past loads.
+  let kplP = 0; let kplN = 0;
+  if (kgPerLog) {
+    const K = kplPremium(wood, kgPerLog);
+    kplN = K.n;
+    if (K.n && K.similar) {
+      kplP = K.p;
+      factors.push({ icon: '🪵', label: `${nf.format(Math.round(kgPerLog))} kg per log`, text: `${K.similar} past load${K.similar === 1 ? '' : 's'} with similar logs (${K.scope}) sold ${sgn(K.avg * 100)} vs market · your usual: ${nf.format(Math.round(K.typical))} kg/log`, pct: kplP * 100 });
+    } else if (K.n) {
+      kplP = K.p;
+      factors.push({ icon: '🪵', label: `${nf.format(Math.round(kgPerLog))} kg per log`, text: `${kgPerLog > K.typical ? 'Thicker' : 'Thinner'} than your usual loads (${nf.format(Math.round(K.typical))} kg/log) – few loads like this yet`, pct: kplP * 100 });
+    } else {
+      factors.push({ icon: '🪵', label: `${nf.format(Math.round(kgPerLog))} kg per log`, text: 'Add log count to your orders – the app learns how log thickness changes the price', pct: 0 });
+    }
   }
   // Log length: 8 ft single vs two 4 ft pieces.
   let lenP = 0;
@@ -188,7 +194,7 @@ function priceSuggestion({ wood, logSize, logLength, photos }) {
   }
 
   // Photos: find past loads that look similar, comparing each side with the same side.
-  let photoP = 0; let similar = []; let sizeHint = null;
+  let photoP = 0; let similar = [];
   if (nSides) {
     const cands = [];
     for (const o of state.orders) {
@@ -203,22 +209,13 @@ function priceSuggestion({ wood, logSize, logLength, photos }) {
       let sw = 0; let sp = 0;
       use.forEach((c) => { const w = (c.sim - 0.5) ** 2; sw += w; sp += w * c.prem; });
       photoP = (sp / sw) * (use.length / (use.length + 2)) * (0.7 + 0.1 * nSides);
-      factors.push({ icon: '📷', label: 'Photos', text: `${nSides} side${nSides === 1 ? '' : 's'} compared · looks like ${use.length} past ${wood} load${use.length === 1 ? '' : 's'} that sold ${sgn((sp / sw) * 100)} vs market`, pct: photoP * 100 * (logSize ? 0.6 : 1) });
+      factors.push({ icon: '📷', label: 'Photos', text: `${nSides} side${nSides === 1 ? '' : 's'} compared · looks like ${use.length} past ${wood} load${use.length === 1 ? '' : 's'} that sold ${sgn((sp / sw) * 100)} vs market`, pct: photoP * 100 * (kplP ? 0.6 : 1) });
     } else {
       factors.push({ icon: '📷', label: 'Photos', text: cands.length ? `No close match among ${cands.length} past loads with photos yet` : 'No past load photos yet – add the 3 photos to your orders to learn', pct: 0 });
     }
-    // Guess log size from the closest past loads that have a size marked.
-    const voters = cands.filter((c) => c.o.logSize && c.sim >= 0.6).slice(0, 5);
-    if (voters.length >= 2) {
-      const tally = {};
-      voters.forEach((c) => { tally[c.o.logSize] = (tally[c.o.logSize] || 0) + c.sim; });
-      const [top, v] = Object.entries(tally).sort((x, y) => y[1] - x[1])[0];
-      const total = Object.values(tally).reduce((x, y) => x + y, 0);
-      if (v / total >= 0.6) sizeHint = top;
-    }
   }
 
-  const prem = clamp(sizeP + lenP + (logSize ? 0.6 : 1) * photoP, -0.25, 0.25);
+  const prem = clamp(kplP + lenP + (kplP ? 0.6 : 1) * photoP, -0.25, 0.25);
   const step = settings.priceUnit === 'ton' ? 10 : 0.1;
   const roundTo = (v) => Math.round(v / step) * step;
   const price = roundTo(base * (1 + prem));
@@ -226,72 +223,86 @@ function priceSuggestion({ wood, logSize, logLength, photos }) {
   // Range from how much your recent prices for this wood vary.
   const recent = state.orders.filter((o) => o.woodType === wood && (today - parseYmd(o.date)) / 864e5 <= 120).map(orderPremium).filter((v) => v != null);
   const sd = recent.length >= 3 ? Math.sqrt(mean(recent.map((v) => v * v))) : 0.06;
-  const spread = clamp(sd, 0.02, 0.15) * (logSize || photoP ? 0.8 : 1);
+  const spread = clamp(sd, 0.02, 0.15) * (kplP || photoP ? 0.8 : 1);
   factors.push({ icon: ol.direction === 'up' ? '▲' : ol.direction === 'down' ? '▼' : '►', label: 'Next 3 weeks', text: ol.direction === 'flat' ? 'Price likely steady' : `Price ${ol.direction === 'up' ? 'may go up' : 'may go down'} – see outlook`, pct: ol.pct });
 
-  let score = (ol.bills >= 10 ? 2 : ol.bills >= 3 ? 1 : 0) + (sizeN >= 3 ? 1 : 0) + (photoP ? 1 : 0);
+  let score = (ol.bills >= 10 ? 2 : ol.bills >= 3 ? 1 : 0) + (kplN >= 3 ? 1 : 0) + (photoP ? 1 : 0);
   const confidence = score >= 3 ? 'High' : score >= 2 ? 'Medium' : 'Low';
   return {
     ready: true, wood, base, price, low: roundTo(price * (1 - spread)), high: roundTo(price * (1 + spread)),
-    prem, factors, similar, sizeHint, outlook: ol, confidence, in3w: roundTo(price * (1 + ol.pct / 100)),
+    prem, factors, similar, outlook: ol, confidence, in3w: roundTo(price * (1 + ol.pct / 100)),
   };
+}
+
+// Current market rate: the latest bills for this wood.
+function latestBillsCard(wood) {
+  const os = state.orders.filter((o) => o.woodType === wood && billPrice(o)).sort(sortOrdersDesc).slice(0, 6);
+  if (!os.length) return '';
+  return `<div class="card"><h3>Latest ${esc(wood)} bills <small>market rate</small></h3>
+    ${os.map((o) => {
+      const kpl = num(o.logCount) && orderKg(o) ? Math.round(orderKg(o) / num(o.logCount)) : null;
+      return `<div class="item" data-order="${esc(o.id)}"><div class="main"><div class="title">${money0(billPrice(o))}${priceLabel()}</div>
+        <div class="sub">${fmtDate(o.date)} · ${esc(partyName(o.supplierId))} → ${esc(partyName(o.buyerId))}</div></div>
+        <div class="amt small">${fmtWeight(orderKg(o))}<div class="sub">${kpl ? kpl + ' kg/log' : ''}</div></div></div>`;
+    }).join('')}</div>`;
 }
 
 /* ---------- Price check screen ---------- */
 function renderPriceCheck(view) {
   const woods = usedWoods();
-  const pc = state.priceCheck || (state.priceCheck = { wood: woods[0] || '', logSize: '', logLength: '8ft', weight: '', unit: settings.defaultUnit, photos: {} });
+  const pc = state.priceCheck || (state.priceCheck = { wood: woods[0] || '', logLength: '8ft', weight: '', unit: settings.defaultUnit, photos: {}, logs: {} });
   if (pc.logLength === undefined) pc.logLength = '8ft';
   if (!pc.photos) pc.photos = {};
+  if (!pc.logs) pc.logs = {};
   view.innerHTML = `
     <div class="card">
-      <p class="small muted" style="margin-top:0">Take 3 photos of the loaded lorry – left side, right side and back (cut ends) – and choose the wood. The app suggests a price from your past orders, the log size and today's market.</p>
+      <p class="small muted" style="margin-top:0">Take 3 photos of the loaded lorry – left side, right side and back (cut ends) – and choose the wood. The app counts the logs, works out the average log weight and suggests a price from your past orders and today's market.</p>
       <div class="field"><label for="pcWood">Wood type</label><select class="input" id="pcWood">${woodOpts(pc.wood)}</select></div>
       <div class="field"><label>Photos of the load</label>
         <div id="pcPhotos"></div>
       </div>
-      <div class="field"><label>Log size (girth)</label>
-        <div class="seg" id="pcSize" style="margin:0">${LOG_SIZES.map(([k, l]) => `<button type="button" data-s="${k}" class="${pc.logSize === k ? 'active' : ''}">${k ? l : '—'}</button>`).join('')}</div></div>
-        <div class="hint">Small = thin logs, Big = thick logs (girth). Thick logs usually sell higher per ton.</div></div>
       <div class="field"><label>Log length</label>
         <div class="seg" id="pcLen" style="margin:0">${LOG_LENGTHS.map(([k, l]) => `<button type="button" data-l="${k}" class="${pc.logLength === k ? 'active' : ''}">${l}</button>`).join('')}</div></div>
-      <div class="field" style="margin-bottom:0"><label for="pcWeight">Weight (optional)</label>
+      <div class="field"><label for="pcWeight">Weight</label>
         <div class="input-group">
           <input class="input" id="pcWeight" type="number" inputmode="decimal" step="any" min="0" value="${esc(pc.weight)}" placeholder="0">
           <select class="input unit" id="pcUnit"><option value="ton" ${pc.unit === 'ton' ? 'selected' : ''}>Ton</option><option value="kg" ${pc.unit === 'kg' ? 'selected' : ''}>Kg</option></select>
         </div></div>
+      <div class="field" style="margin-bottom:0" id="pcLogs"></div>
     </div>
     <div id="pcResult"></div>`;
 
-  sidePhotoSlots($('#pcPhotos'), pc.photos, { onChange: () => compute() });
+  const pcKg = () => (pc.unit === 'ton' ? num(pc.weight) * 1000 : num(pc.weight));
+  const logs = logCountField($('#pcLogs'), pc.logs, { getBack: () => pc.photos.back, getKg: pcKg, onChange: () => compute() });
+  let lastBack = pc.photos.back;
+  sidePhotoSlots($('#pcPhotos'), pc.photos, {
+    onChange: () => {
+      if (pc.photos.back && pc.photos.back !== lastBack) { pc.logs.count = ''; pc.logs.dots = null; logs.autoCount(pc.photos.back.blob); }
+      lastBack = pc.photos.back;
+      compute();
+    },
+  });
   $('#pcWood').onchange = (e) => { pc.wood = e.target.value; compute(); };
-  const setSize = (k) => {
-    pc.logSize = k;
-    $$('#pcSize button').forEach((x) => x.classList.toggle('active', x.dataset.s === k));
-    compute();
-  };
-  $$('#pcSize button').forEach((b) => b.onclick = () => setSize(b.dataset.s));
   $$('#pcLen button').forEach((b) => b.onclick = () => {
     pc.logLength = b.dataset.l;
     $$('#pcLen button').forEach((x) => x.classList.toggle('active', x === b));
     compute();
   });
-  $('#pcWeight').oninput = (e) => { pc.weight = e.target.value; compute(); };
-  $('#pcUnit').onchange = (e) => { pc.unit = e.target.value; compute(); };
+  $('#pcWeight').oninput = (e) => { pc.weight = e.target.value; logs.update(); compute(); };
+  $('#pcUnit').onchange = (e) => { pc.unit = e.target.value; logs.update(); compute(); };
 
   function compute() {
     const box = $('#pcResult');
     if (!box) return;
-    const r = priceSuggestion({ wood: pc.wood, logSize: pc.logSize, logLength: pc.logLength, photos: pc.photos });
+    const r = priceSuggestion({ wood: pc.wood, logLength: pc.logLength, photos: pc.photos, kgPerLog: num(pc.logs.count) && pcKg() ? pcKg() / num(pc.logs.count) : null });
     if (!r.ready) { box.innerHTML = `<div class="card empty" style="padding:20px">${ICON.chart}<p>${esc(r.reason)}</p></div>`; return; }
     const kg = pc.unit === 'ton' ? num(pc.weight) * 1000 : num(pc.weight);
     const perKgPrice = settings.priceUnit === 'ton' ? r.price / 1000 : r.price;
     const total = kg ? round2(perKgPrice * kg) : 0;
     const comm = round2((total * settings.commissionPct) / 100);
     box.innerHTML = `
-      ${r.sizeHint && !pc.logSize ? `<div class="banner hint-banner">📏<div class="grow">Photos look like <b>${sizeName(r.sizeHint)} logs</b> (from similar past loads).</div><button class="btn sm" id="pcUseSize">Use</button></div>` : ''}
       <div class="card price-card">
-        <div class="small muted">Suggested price · ${esc(r.wood)}${pc.logSize ? ' · ' + sizeName(pc.logSize) + ' logs' : ''}${pc.logLength ? ' · ' + lengthName(pc.logLength) : ''}</div>
+        <div class="small muted">Suggested price · ${esc(r.wood)}${num(pc.logs.count) ? ' · ' + pc.logs.count + ' logs' : ''}${pc.logLength ? ' · ' + lengthName(pc.logLength) : ''}</div>
         <div class="price-big">${money0(r.price)}<span>${priceLabel()}</span></div>
         <div class="small">Fair range <b>${money0(r.low)} – ${money0(r.high)}</b> <span class="conf conf-${r.confidence.toLowerCase()}">${r.confidence} confidence</span></div>
         ${kg ? `<div class="price-total"><div><span class="small muted">Load value (${fmtWeight(kg)})</span><b>${money0(total)}</b></div><div><span class="small muted">My brokerage ${nf.format(settings.commissionPct)}%</span><b style="color:var(--accent)">${money0(comm)}</b></div></div>` : ''}
@@ -303,11 +314,11 @@ function renderPriceCheck(view) {
         const p = billPrice(c.o);
         return `<div class="item" data-order="${esc(c.o.id)}"><div class="thumb sim-thumb" id="sim${i}"></div>
           <div class="main"><div class="title">${esc(c.o.woodType || 'Wood')} · ${p ? money0(p) + priceLabel() : '—'}</div>
-          <div class="sub">${fmtDate(c.o.date)} · ${esc(partyName(c.o.supplierId))} → ${esc(partyName(c.o.buyerId))}${c.o.logSize ? ' · ' + sizeName(c.o.logSize) : ''}${c.o.logLength ? ' · ' + lengthName(c.o.logLength) : ''}</div></div>
+          <div class="sub">${fmtDate(c.o.date)} · ${esc(partyName(c.o.supplierId))} → ${esc(partyName(c.o.buyerId))}${num(c.o.logCount) && orderKg(c.o) ? ' · ' + Math.round(orderKg(c.o) / num(c.o.logCount)) + ' kg/log' : ''}${c.o.logLength ? ' · ' + lengthName(c.o.logLength) : ''}</div></div>
           <div class="amt small">${Math.round(c.sim * 100)}%<div class="sub">alike</div></div></div>`;
-      }).join('')}</div></div>` : ''}`;
+      }).join('')}</div></div>` : ''}
+      ${latestBillsCard(r.wood)}`;
     bindOrderItems(box);
-    $('#pcUseSize', box)?.addEventListener('click', () => setSize(r.sizeHint));
     r.similar.forEach(async (c, i) => {
       const f = await DB.get('files', c.fileId);
       const t = $('#sim' + i, box);
@@ -316,7 +327,7 @@ function renderPriceCheck(view) {
     $('#pcUse').onclick = () => {
       const perTon = settings.priceUnit === 'ton' ? r.price : r.price * 1000;
       state.prefill = {
-        woodType: r.wood, logSize: pc.logSize, logLength: pc.logLength, unit: pc.unit,
+        woodType: r.wood, logCount: pc.logs.count, logDots: pc.logs.dots, logLength: pc.logLength, unit: pc.unit,
         weight: pc.weight === '' ? '' : num(pc.weight),
         rate: round2(pc.unit === 'ton' ? perTon : perTon / 1000),
         woodPhotos: Object.fromEntries(Object.entries(pc.photos).map(([k, v]) => [k, { blob: v.blob, feats: v.feats, name: v.name }])),
@@ -325,4 +336,167 @@ function renderPriceCheck(view) {
     };
   }
   compute();
+}
+
+/* =========================================================
+   Log counting from the back photo (cut ends)
+   Auto-detects round, light, warm-coloured cut ends; the user then
+   taps to add missed logs or remove wrong dots.
+   ========================================================= */
+async function detectLogEnds(blob) {
+  const bmp = await createImageBitmap(blob);
+  const W = 360; const H = Math.max(1, Math.round((bmp.height * W) / bmp.width));
+  const c = document.createElement('canvas');
+  c.width = W; c.height = H;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bmp, 0, 0, W, H);
+  const d = ctx.getImageData(0, 0, W, H).data;
+  const N = W * H;
+  const score = new Float32Array(N); const warm = new Uint8Array(N);
+  const hist = new Array(256).fill(0);
+  for (let i = 0, p = 0; p < N; i += 4, p++) {
+    const r = d[i]; const g = d[i + 1]; const b = d[i + 2];
+    const v = (r + g + b) / 3 + 0.5 * Math.max(0, r - b);
+    score[p] = v;
+    warm[p] = r - b > 8 && r >= g * 0.9 ? 1 : 0;
+    hist[Math.min(255, Math.round(v * 0.67))]++;
+  }
+  // Otsu threshold: split the picture into bright cut ends vs the rest.
+  let sum = 0; for (let i = 0; i < 256; i++) sum += i * hist[i];
+  let sB = 0; let wB = 0; let best = 0; let t = 128;
+  for (let i = 0; i < 256; i++) {
+    wB += hist[i]; if (!wB) continue;
+    const wF = N - wB; if (!wF) break;
+    sB += i * hist[i];
+    const mB = sB / wB; const mF = (sum - sB) / wF;
+    const between = wB * wF * (mB - mF) ** 2;
+    if (between > best) { best = between; t = i; }
+  }
+  const thr = t / 0.67;
+  const mask = new Uint8Array(N);
+  for (let p = 0; p < N; p++) mask[p] = score[p] > thr && warm[p] ? 1 : 0;
+  // Distance to the nearest non-cut-end pixel (chamfer). Centres of logs are the peaks.
+  const INF = 1e9; const dist = new Float32Array(N);
+  for (let p = 0; p < N; p++) dist[p] = mask[p] ? INF : 0;
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const p = y * W + x; if (!dist[p]) continue;
+    let m = dist[p];
+    if (x > 0) m = Math.min(m, dist[p - 1] + 1);
+    if (y > 0) { m = Math.min(m, dist[p - W] + 1); if (x > 0) m = Math.min(m, dist[p - W - 1] + 1.4); if (x < W - 1) m = Math.min(m, dist[p - W + 1] + 1.4); }
+    if (x === 0 || y === 0 || x === W - 1 || y === H - 1) m = Math.min(m, 1);
+    dist[p] = m;
+  }
+  for (let y = H - 1; y >= 0; y--) for (let x = W - 1; x >= 0; x--) {
+    const p = y * W + x; if (!dist[p]) continue;
+    let m = dist[p];
+    if (x < W - 1) m = Math.min(m, dist[p + 1] + 1);
+    if (y < H - 1) { m = Math.min(m, dist[p + W] + 1); if (x < W - 1) m = Math.min(m, dist[p + W + 1] + 1.4); if (x > 0) m = Math.min(m, dist[p + W - 1] + 1.4); }
+    dist[p] = m;
+  }
+  const peaks = [];
+  for (let y = 2; y < H - 2; y++) for (let x = 2; x < W - 2; x++) {
+    const p = y * W + x; const v = dist[p];
+    if (v < 3) continue;
+    let isMax = true;
+    for (let dy = -2; dy <= 2 && isMax; dy++) for (let dx = -2; dx <= 2; dx++) if ((dx || dy) && dist[p + dy * W + dx] > v) { isMax = false; break; }
+    if (isMax) peaks.push({ x, y, r: v });
+  }
+  peaks.sort((a, b) => b.r - a.r);
+  const kept = [];
+  for (const pk of peaks) if (!kept.some((k) => Math.hypot(k.x - pk.x, k.y - pk.y) < Math.max(k.r, pk.r) * 1.1)) kept.push(pk);
+  if (!kept.length) return [];
+  const med = kept.map((k) => k.r).sort((a, b) => a - b)[Math.floor(kept.length / 2)];
+  return kept.filter((k) => k.r >= med * 0.45 && k.r <= med * 3)
+    .map((k) => ({ x: Math.round((k.x / W) * 1000) / 1000, y: Math.round((k.y / H) * 1000) / 1000 }));
+}
+
+// Full-screen counting sheet: dots on each log end, tap to add / remove.
+function openLogCounter(blob, dots, onDone) {
+  let list = (dots || []).map((p) => ({ ...p }));
+  const url = blobUrl(blob);
+  const body = openSheet(`
+    <h2>Count logs</h2>
+    <p class="small muted" style="margin-top:-6px">Each dot = one log. Tap a missed log end to add a dot; tap a wrong dot to remove it.</p>
+    <div class="counter" id="cntBox"><img src="${url}" alt="Back of the load"><div class="dots" id="cntDots"></div></div>
+    <div class="row" style="margin:12px 0">
+      <div class="grow"><span class="count-big" id="cntN">0</span> <span class="muted">logs</span></div>
+      <button type="button" class="btn sm" id="cntAuto">Auto-detect</button>
+      <button type="button" class="btn sm" id="cntClear">Clear</button>
+    </div>
+    <button type="button" class="btn primary block" id="cntDone">${ICON.check} Done</button>`);
+  const box = $('#cntBox', body); const layer = $('#cntDots', body);
+  const draw = () => {
+    layer.innerHTML = list.map((p, i) => `<span class="dot" data-i="${i}" style="left:${p.x * 100}%;top:${p.y * 100}%"></span>`).join('');
+    $('#cntN', body).textContent = list.length;
+  };
+  box.onclick = (e) => {
+    const dot = e.target.closest('.dot');
+    if (dot) { list.splice(Number(dot.dataset.i), 1); draw(); return; }
+    const rc = $('img', box).getBoundingClientRect();
+    list.push({ x: Math.round(((e.clientX - rc.left) / rc.width) * 1000) / 1000, y: Math.round(((e.clientY - rc.top) / rc.height) * 1000) / 1000 });
+    draw();
+  };
+  $('#cntAuto', body).onclick = async () => { list = await detectLogEnds(blob); draw(); toast(`Found ${list.length} logs – please check`); };
+  $('#cntClear', body).onclick = () => { list = []; draw(); };
+  $('#cntDone', body).onclick = () => { closeSheet(); onDone(list); };
+  draw();
+}
+
+// Shared "Number of logs" field: input + Count button + avg kg per log hint.
+// st = { count, dots }, getBack() -> back photo slot, getKg() -> load weight in kg
+function logCountField(host, st, { getBack, getKg, onChange }) {
+  host.innerHTML = `
+    <label for="${host.id}In">Number of logs</label>
+    <div class="input-group">
+      <input class="input" id="${host.id}In" type="number" inputmode="numeric" min="0" step="1" value="${st.count || ''}" placeholder="0">
+      <button type="button" class="btn" data-count>${ICON.scan} Count from photo</button>
+    </div>
+    <div class="hint" data-hint></div>`;
+  const input = $('input', host); const hint = $('[data-hint]', host);
+  const update = () => {
+    const kg = getKg(); const n = num(st.count);
+    hint.innerHTML = n && kg ? `Average log weight <b>${nf.format(Math.round(kg / n))} kg</b> (${fmtWeight(kg)} ÷ ${n} logs)`
+      : n ? 'Enter the weight to see the average log weight' : 'Count the cut ends in the back photo – weight ÷ logs shows how thick the logs are';
+  };
+  input.oninput = () => { st.count = input.value === '' ? '' : Math.round(num(input.value)); st.dots = null; update(); onChange?.(); };
+  $('[data-count]', host).onclick = () => {
+    const back = getBack();
+    if (!back?.blob) { toast('Add the back photo (cut ends) first'); return; }
+    openLogCounter(back.blob, st.dots, (dots) => { st.dots = dots; st.count = dots.length; input.value = dots.length || ''; update(); onChange?.(); });
+  };
+  update();
+  return {
+    update,
+    // Auto-count when a new back photo is added and no count was entered yet.
+    async autoCount(blob) {
+      if (num(st.count)) return;
+      try {
+        const dots = await detectLogEnds(blob);
+        if (!dots.length || num(st.count)) return;
+        st.dots = dots; st.count = dots.length; input.value = dots.length;
+        update(); onChange?.();
+        toast(`Auto-counted ${dots.length} logs – tap “Count from photo” to check`);
+      } catch { /* ignore */ }
+    },
+  };
+}
+
+// Learn how average log weight affects price: past loads with similar kg/log (same wood first).
+function kplPremium(wood, kpl) {
+  let pts = state.orders.filter((o) => o.woodType === wood && num(o.logCount) > 0 && orderKg(o) > 0);
+  let scope = wood;
+  if (pts.length < 3) { pts = state.orders.filter((o) => num(o.logCount) > 0 && orderKg(o) > 0); scope = 'all woods'; }
+  const rows = pts.map((o) => ({ kpl: orderKg(o) / num(o.logCount), prem: orderPremium(o) })).filter((x) => x.prem != null);
+  if (!rows.length) return { n: 0, p: 0, scope };
+  const typical = rows.map((x) => x.kpl).sort((a, b) => a - b)[Math.floor(rows.length / 2)];
+  let sw = 0; let sp = 0; let similar = 0;
+  for (const x of rows) {
+    const dl = Math.log(x.kpl / kpl);
+    const w = Math.exp(-(dl * dl) / (2 * 0.25 * 0.25));
+    sw += w; sp += w * x.prem;
+    if (Math.abs(dl) < 0.25) similar++;
+  }
+  if (sw < 0.05) return { n: rows.length, p: 0, scope, typical, similar: 0, avg: 0 };
+  const avg = sp / sw;
+  return { n: rows.length, p: avg * (sw / (sw + 2)), scope, typical, similar, avg };
 }
