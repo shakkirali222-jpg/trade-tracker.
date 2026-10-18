@@ -29,7 +29,7 @@ It is a single-user web app that installs on the phone ("Add to Home screen"), w
 
 **Price check**
 - Take 3 photos of the loaded lorry (left side, right side, back with the cut ends), choose the wood and enter the weight.
-- **Log count:** the app counts the cut ends in the back photo automatically and shows a dot on each log; tap to add a missed log or remove a wrong dot. Weight ÷ number of logs = **average log weight** (kg per log), which shows how thick the logs are.
+- **Log count:** the app counts the cut ends in the back photo automatically and shows a dot on each log; tap to add a missed log or remove a wrong dot. Logs in a load are different sizes, so the app also measures each cut end: each log's weight = load weight shared by cut-end area. It shows the mix (thin < 50 kg, medium 50–120 kg, thick > 120 kg per 8 ft log; half for 4 ft pieces) and the share of weight in each, and prices on the tonnage-weighted log size.
 - The app suggests a price per ton with a fair range, load value and your brokerage. It learns from your past orders: loads with similar kg-per-log, log length (8 ft single or 2 × 4 ft), similar-looking photos (each side compared with the same side), plus today's market rate from your latest bills.
 - Shows the most similar past loads and the latest bills for that wood. "Create order at this price" opens a new order already filled in.
 - Orders have the 3 wood photos, number of logs and log length, so Price check keeps learning.

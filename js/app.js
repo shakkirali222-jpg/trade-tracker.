@@ -581,7 +581,7 @@ async function showOrder(id) {
       <dt>Supplier</dt><dd>${esc(sup?.name || 'Unknown')}${sup?.phone ? ` · <a href="${telLink(sup.phone)}">${esc(sup.phone)}</a>` : ''}</dd>
       <dt>Buyer</dt><dd>${esc(buy?.name || 'Unknown')}${buy?.phone ? ` · <a href="${telLink(buy.phone)}">${esc(buy.phone)}</a>` : ''}</dd>
       ${o.woodType ? `<dt>Wood</dt><dd>${esc(o.woodType)}${o.logSize ? ` · ${sizeName(o.logSize)} logs` : ''}</dd>` : ''}
-      ${num(o.logCount) ? `<dt>Logs</dt><dd>${o.logCount}${kg ? ` · avg ${nf.format(Math.round(kg / num(o.logCount)))} kg/log` : ''}</dd>` : ''}
+      ${num(o.logCount) ? `<dt>Logs</dt><dd>${o.logCount}${kg ? ` · avg ${nf.format(Math.round(kg / num(o.logCount)))} kg` : ''}${(() => { const m = o.logDots?.length === num(o.logCount) ? logMix(o.logDots, kg, o.logLength) : null; return m ? `<br><span class="small muted" style="font-weight:400">${mixText(m)}</span>${mixBar(m)}` : ''; })()}</dd>` : ''}
       ${o.logLength ? `<dt>Log length</dt><dd>${lengthName(o.logLength)}</dd>` : ''}
       ${o.weight ? `<dt>Weight</dt><dd>${nf.format(num(o.weight))} ${o.unit === 'ton' ? 'ton' : 'kg'}</dd>` : ''}
       ${o.rate ? `<dt>Rate</dt><dd>${money(o.rate)} / ${o.unit === 'ton' ? 'ton' : 'kg'}</dd>` : ''}
@@ -983,6 +983,7 @@ function renderOrderForm(view, editId) {
     logLength = b.dataset.l;
     $$('#fLen button').forEach((x) => x.classList.toggle('active', x === b));
     dirty = true;
+    logsField?.update();
   });
   // ---- Photo fields (weight slips, wood photos) ----
   function photoField({ list, box, cam, gal, alt }) {
@@ -1030,7 +1031,7 @@ function renderOrderForm(view, editId) {
   }
   const drawSlips = photoField({ list: slips, box: '#slipThumbs', cam: '#slipCamera', gal: '#slipInput', alt: 'Weight slip' });
   const formKg = () => (el.unit.value === 'ton' ? num(el.weight.value) * 1000 : num(el.weight.value));
-  const logsField = logCountField($('#fLogs'), logSt, { getBack: () => woodSlots.back, getKg: formKg, onChange: () => { dirty = true; } });
+  const logsField = logCountField($('#fLogs'), logSt, { getBack: () => woodSlots.back, getKg: formKg, getLength: () => logLength, onChange: () => { dirty = true; } });
   [el.weight, el.unit].forEach((i) => i.addEventListener('input', () => logsField.update()));
   el.unit.addEventListener('change', () => logsField.update());
   let lastBack = woodSlots.back;

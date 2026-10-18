@@ -391,3 +391,11 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .counter .dots { position: absolute; inset: 0; }
 .counter .dot { position: absolute; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; background: #18a558; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.4); }
 .count-big { font-size: 28px; font-weight: 800; color: var(--primary); }
+.counter .ring { position: absolute; aspect-ratio: 1; transform: translate(-50%, -50%); border: 2px solid rgba(24, 165, 88, .9); border-radius: 50%; pointer-events: none; }
+.counter .dot { width: 12px; height: 12px; margin: -6px 0 0 -6px; z-index: 1; }
+.mix-bar { display: flex; height: 10px; border-radius: 999px; overflow: hidden; margin: 6px 0 4px; background: var(--surface-2); }
+.mix-bar i { display: block; height: 100%; }
+.mix-thin { background: #e3b778; }
+.mix-medium { background: #b9773b; }
+.mix-thick { background: #6b3f17; }
+.mix-legend { display: block; font-size: 12px; }

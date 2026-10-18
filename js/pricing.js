@@ -156,7 +156,7 @@ function orderPremium(o) {
 }
 const mean = (a) => a.reduce((x, y) => x + y, 0) / (a.length || 1);
 
-function priceSuggestion({ wood, logLength, photos, kgPerLog }) {
+function priceSuggestion({ wood, logLength, photos, kgPerLog, mix }) {
   const query = {};
   for (const [side] of WOOD_SIDES) if (photos?.[side]?.feats) query[side] = photos[side].feats;
   const nSides = Object.keys(query).length;
@@ -175,12 +175,12 @@ function priceSuggestion({ wood, logLength, photos, kgPerLog }) {
     kplN = K.n;
     if (K.n && K.similar) {
       kplP = K.p;
-      factors.push({ icon: '🪵', label: `${nf.format(Math.round(kgPerLog))} kg per log`, text: `${K.similar} past load${K.similar === 1 ? '' : 's'} with similar logs (${K.scope}) sold ${sgn(K.avg * 100)} vs market · your usual: ${nf.format(Math.round(K.typical))} kg/log`, pct: kplP * 100 });
+      factors.push({ icon: '🪵', label: mix ? 'Log mix' : `${nf.format(Math.round(kgPerLog))} kg per log`, text: `${mix ? mixText(mix) + ' · ' : ''}${K.similar} past load${K.similar === 1 ? '' : 's'} with similar logs (${K.scope}) sold ${sgn(K.avg * 100)} vs market`, pct: kplP * 100 });
     } else if (K.n) {
       kplP = K.p;
-      factors.push({ icon: '🪵', label: `${nf.format(Math.round(kgPerLog))} kg per log`, text: `${kgPerLog > K.typical ? 'Thicker' : 'Thinner'} than your usual loads (${nf.format(Math.round(K.typical))} kg/log) – few loads like this yet`, pct: kplP * 100 });
+      factors.push({ icon: '🪵', label: mix ? 'Log mix' : `${nf.format(Math.round(kgPerLog))} kg per log`, text: `${mix ? mixText(mix) + ' · ' : ''}${kgPerLog > K.typical ? 'Thicker' : 'Thinner'} than your usual loads – few loads like this yet`, pct: kplP * 100 });
     } else {
-      factors.push({ icon: '🪵', label: `${nf.format(Math.round(kgPerLog))} kg per log`, text: 'Add log count to your orders – the app learns how log thickness changes the price', pct: 0 });
+      factors.push({ icon: '🪵', label: mix ? 'Log mix' : `${nf.format(Math.round(kgPerLog))} kg per log`, text: `${mix ? mixText(mix) + ' · ' : ''}add log counts to your orders – the app learns how thick and thin logs change the price`, pct: 0 });
     }
   }
   // Log length: 8 ft single vs two 4 ft pieces.
@@ -273,7 +273,7 @@ function renderPriceCheck(view) {
     <div id="pcResult"></div>`;
 
   const pcKg = () => (pc.unit === 'ton' ? num(pc.weight) * 1000 : num(pc.weight));
-  const logs = logCountField($('#pcLogs'), pc.logs, { getBack: () => pc.photos.back, getKg: pcKg, onChange: () => compute() });
+  const logs = logCountField($('#pcLogs'), pc.logs, { getBack: () => pc.photos.back, getKg: pcKg, getLength: () => pc.logLength, onChange: () => compute() });
   let lastBack = pc.photos.back;
   sidePhotoSlots($('#pcPhotos'), pc.photos, {
     onChange: () => {
@@ -286,6 +286,7 @@ function renderPriceCheck(view) {
   $$('#pcLen button').forEach((b) => b.onclick = () => {
     pc.logLength = b.dataset.l;
     $$('#pcLen button').forEach((x) => x.classList.toggle('active', x === b));
+    logs.update();
     compute();
   });
   $('#pcWeight').oninput = (e) => { pc.weight = e.target.value; logs.update(); compute(); };
@@ -294,7 +295,8 @@ function renderPriceCheck(view) {
   function compute() {
     const box = $('#pcResult');
     if (!box) return;
-    const r = priceSuggestion({ wood: pc.wood, logLength: pc.logLength, photos: pc.photos, kgPerLog: num(pc.logs.count) && pcKg() ? pcKg() / num(pc.logs.count) : null });
+    const pcMix = num(pc.logs.count) && pc.logs.dots?.length === num(pc.logs.count) ? logMix(pc.logs.dots, pcKg(), pc.logLength) : null;
+    const r = priceSuggestion({ wood: pc.wood, logLength: pc.logLength, photos: pc.photos, mix: pcMix, kgPerLog: pcMix ? pcMix.wavg : num(pc.logs.count) && pcKg() ? pcKg() / num(pc.logs.count) : null });
     if (!r.ready) { box.innerHTML = `<div class="card empty" style="padding:20px">${ICON.chart}<p>${esc(r.reason)}</p></div>`; return; }
     const kg = pc.unit === 'ton' ? num(pc.weight) * 1000 : num(pc.weight);
     const perKgPrice = settings.priceUnit === 'ton' ? r.price / 1000 : r.price;
@@ -314,7 +316,7 @@ function renderPriceCheck(view) {
         const p = billPrice(c.o);
         return `<div class="item" data-order="${esc(c.o.id)}"><div class="thumb sim-thumb" id="sim${i}"></div>
           <div class="main"><div class="title">${esc(c.o.woodType || 'Wood')} · ${p ? money0(p) + priceLabel() : '—'}</div>
-          <div class="sub">${fmtDate(c.o.date)} · ${esc(partyName(c.o.supplierId))} → ${esc(partyName(c.o.buyerId))}${num(c.o.logCount) && orderKg(c.o) ? ' · ' + Math.round(orderKg(c.o) / num(c.o.logCount)) + ' kg/log' : ''}${c.o.logLength ? ' · ' + lengthName(c.o.logLength) : ''}</div></div>
+          <div class="sub">${fmtDate(c.o.date)} · ${esc(partyName(c.o.supplierId))} → ${esc(partyName(c.o.buyerId))}${orderLogKg(c.o) ? ' · ~' + Math.round(orderLogKg(c.o)) + ' kg logs' : ''}${c.o.logLength ? ' · ' + lengthName(c.o.logLength) : ''}</div></div>
           <div class="amt small">${Math.round(c.sim * 100)}%<div class="sub">alike</div></div></div>`;
       }).join('')}</div></div>` : ''}
       ${latestBillsCard(r.wood)}`;
@@ -404,10 +406,57 @@ async function detectLogEnds(blob) {
   peaks.sort((a, b) => b.r - a.r);
   const kept = [];
   for (const pk of peaks) if (!kept.some((k) => Math.hypot(k.x - pk.x, k.y - pk.y) < Math.max(k.r, pk.r) * 1.1)) kept.push(pk);
-  if (!kept.length) return [];
+  if (!kept.length) { detectCache = { blob, W, H, dist, med: 8 }; return []; }
   const med = kept.map((k) => k.r).sort((a, b) => a - b)[Math.floor(kept.length / 2)];
+  detectCache = { blob, W, H, dist, med };
+  // r = radius of the cut end as a share of the photo width (log thickness on the photo)
   return kept.filter((k) => k.r >= med * 0.45 && k.r <= med * 3)
-    .map((k) => ({ x: Math.round((k.x / W) * 1000) / 1000, y: Math.round((k.y / H) * 1000) / 1000 }));
+    .map((k) => ({ x: Math.round((k.x / W) * 1000) / 1000, y: Math.round((k.y / H) * 1000) / 1000, r: Math.round((k.r / W) * 10000) / 10000 }));
+}
+let detectCache = null;
+
+// Size of a log end at a tapped point (for logs the user adds by hand).
+async function radiusAt(blob, x, y, list) {
+  if (!detectCache || detectCache.blob !== blob) { try { await detectLogEnds(blob); } catch { /* ignore */ } }
+  const typical = list.filter((p) => p.r).map((p) => p.r).sort((a, b) => a - b)[Math.floor(list.length / 2)] || 0.03;
+  if (!detectCache || detectCache.blob !== blob) return typical;
+  const { W, H, dist, med } = detectCache;
+  const px = Math.round(x * W); const py = Math.round(y * H);
+  let best = 0;
+  for (let dy = -5; dy <= 5; dy++) for (let dx = -5; dx <= 5; dx++) {
+    const xx = px + dx; const yy = py + dy;
+    if (xx >= 0 && yy >= 0 && xx < W && yy < H) best = Math.max(best, dist[yy * W + xx]);
+  }
+  return best >= med * 0.35 ? Math.round((best / W) * 10000) / 10000 : typical;
+}
+
+// Logs in one load are different sizes. All logs have the same length, so each log's weight
+// follows its cut-end area (radius²). Share the load weight out by area.
+const LOG_BANDS = [['thin', 'Thin'], ['medium', 'Medium'], ['thick', 'Thick']];
+function logMix(dots, kg, length) {
+  if (!dots?.length || !kg || dots.some((p) => !p.r)) return null;
+  const f = length === '2x4ft' ? 0.5 : 1; // 4 ft pieces weigh half
+  const area = dots.map((p) => p.r * p.r);
+  const total = area.reduce((a, b) => a + b, 0);
+  const per = area.map((a) => (kg * a) / total);
+  const bands = { thin: { n: 0, kg: 0 }, medium: { n: 0, kg: 0 }, thick: { n: 0, kg: 0 } };
+  per.forEach((w) => { const b = w < 50 * f ? 'thin' : w > 120 * f ? 'thick' : 'medium'; bands[b].n++; bands[b].kg += w; });
+  const sorted = [...per].sort((a, b) => a - b);
+  return {
+    n: per.length, avg: kg / per.length,
+    // Tonnage-weighted log size: what most of the weight is made of.
+    wavg: per.reduce((a, w) => a + w * w, 0) / kg,
+    min: sorted[0], max: sorted[sorted.length - 1], bands, f,
+  };
+}
+const mixText = (m) => LOG_BANDS.filter(([k]) => m.bands[k].n).map(([k, l]) => `${l} ${m.bands[k].n} (${Math.round((m.bands[k].kg / (m.avg * m.n)) * 100)}% of weight)`).join(' · ');
+const mixBar = (m) => `<div class="mix-bar">${LOG_BANDS.map(([k]) => `<i class="mix-${k}" style="width:${(m.bands[k].kg / (m.avg * m.n)) * 100}%"></i>`).join('')}</div>`;
+// Thickness measure used for pricing: tonnage-weighted log weight if sizes are known, else simple average.
+function orderLogKg(o) {
+  const kg = orderKg(o); const n = num(o.logCount);
+  if (!kg || !n) return null;
+  const m = n === o.logDots?.length ? logMix(o.logDots, kg, o.logLength) : null;
+  return m ? m.wavg : kg / n;
 }
 
 // Full-screen counting sheet: dots on each log end, tap to add / remove.
@@ -416,7 +465,7 @@ function openLogCounter(blob, dots, onDone) {
   const url = blobUrl(blob);
   const body = openSheet(`
     <h2>Count logs</h2>
-    <p class="small muted" style="margin-top:-6px">Each dot = one log. Tap a missed log end to add a dot; tap a wrong dot to remove it.</p>
+    <p class="small muted" style="margin-top:-6px">Each dot = one log; the ring shows its size. Tap a missed log end to add it; tap a wrong dot to remove it.</p>
     <div class="counter" id="cntBox"><img src="${url}" alt="Back of the load"><div class="dots" id="cntDots"></div></div>
     <div class="row" style="margin:12px 0">
       <div class="grow"><span class="count-big" id="cntN">0</span> <span class="muted">logs</span></div>
@@ -426,15 +475,19 @@ function openLogCounter(blob, dots, onDone) {
     <button type="button" class="btn primary block" id="cntDone">${ICON.check} Done</button>`);
   const box = $('#cntBox', body); const layer = $('#cntDots', body);
   const draw = () => {
-    layer.innerHTML = list.map((p, i) => `<span class="dot" data-i="${i}" style="left:${p.x * 100}%;top:${p.y * 100}%"></span>`).join('');
+    layer.innerHTML = list.map((p, i) => `<span class="dot" data-i="${i}" style="left:${p.x * 100}%;top:${p.y * 100}%"></span>`
+      + (p.r ? `<span class="ring" style="left:${p.x * 100}%;top:${p.y * 100}%;width:${p.r * 200}%"></span>` : '')).join('');
     $('#cntN', body).textContent = list.length;
   };
-  box.onclick = (e) => {
+  box.onclick = async (e) => {
     const dot = e.target.closest('.dot');
     if (dot) { list.splice(Number(dot.dataset.i), 1); draw(); return; }
     const rc = $('img', box).getBoundingClientRect();
-    list.push({ x: Math.round(((e.clientX - rc.left) / rc.width) * 1000) / 1000, y: Math.round(((e.clientY - rc.top) / rc.height) * 1000) / 1000 });
-    draw();
+    const x = Math.round(((e.clientX - rc.left) / rc.width) * 1000) / 1000;
+    const y = Math.round(((e.clientY - rc.top) / rc.height) * 1000) / 1000;
+    const p = { x, y };
+    list.push(p); draw();
+    p.r = await radiusAt(blob, x, y, list); draw();
   };
   $('#cntAuto', body).onclick = async () => { list = await detectLogEnds(blob); draw(); toast(`Found ${list.length} logs – please check`); };
   $('#cntClear', body).onclick = () => { list = []; draw(); };
@@ -444,7 +497,7 @@ function openLogCounter(blob, dots, onDone) {
 
 // Shared "Number of logs" field: input + Count button + avg kg per log hint.
 // st = { count, dots }, getBack() -> back photo slot, getKg() -> load weight in kg
-function logCountField(host, st, { getBack, getKg, onChange }) {
+function logCountField(host, st, { getBack, getKg, getLength, onChange }) {
   host.innerHTML = `
     <label for="${host.id}In">Number of logs</label>
     <div class="input-group">
@@ -455,8 +508,10 @@ function logCountField(host, st, { getBack, getKg, onChange }) {
   const input = $('input', host); const hint = $('[data-hint]', host);
   const update = () => {
     const kg = getKg(); const n = num(st.count);
-    hint.innerHTML = n && kg ? `Average log weight <b>${nf.format(Math.round(kg / n))} kg</b> (${fmtWeight(kg)} ÷ ${n} logs)`
-      : n ? 'Enter the weight to see the average log weight' : 'Count the cut ends in the back photo – weight ÷ logs shows how thick the logs are';
+    const m = n && kg && st.dots?.length === n ? logMix(st.dots, kg, getLength?.()) : null;
+    hint.innerHTML = m ? `<b>${n} logs</b> · average <b>${nf.format(Math.round(m.avg))} kg</b> · from ${nf.format(Math.round(m.min))} to ${nf.format(Math.round(m.max))} kg each${mixBar(m)}<span class="mix-legend">${mixText(m)}</span>`
+      : n && kg ? `Average log weight <b>${nf.format(Math.round(kg / n))} kg</b> (${fmtWeight(kg)} ÷ ${n} logs). Use “Count from photo” to see thick and thin logs separately.`
+      : n ? 'Enter the weight to see log weights' : 'Count the cut ends in the back photo – the app works out each log’s weight from its size';
   };
   input.oninput = () => { st.count = input.value === '' ? '' : Math.round(num(input.value)); st.dots = null; update(); onChange?.(); };
   $('[data-count]', host).onclick = () => {
@@ -483,10 +538,10 @@ function logCountField(host, st, { getBack, getKg, onChange }) {
 
 // Learn how average log weight affects price: past loads with similar kg/log (same wood first).
 function kplPremium(wood, kpl) {
-  let pts = state.orders.filter((o) => o.woodType === wood && num(o.logCount) > 0 && orderKg(o) > 0);
+  let pts = state.orders.filter((o) => o.woodType === wood && orderLogKg(o));
   let scope = wood;
-  if (pts.length < 3) { pts = state.orders.filter((o) => num(o.logCount) > 0 && orderKg(o) > 0); scope = 'all woods'; }
-  const rows = pts.map((o) => ({ kpl: orderKg(o) / num(o.logCount), prem: orderPremium(o) })).filter((x) => x.prem != null);
+  if (pts.length < 3) { pts = state.orders.filter((o) => orderLogKg(o)); scope = 'all woods'; }
+  const rows = pts.map((o) => ({ kpl: orderLogKg(o), prem: orderPremium(o) })).filter((x) => x.prem != null);
   if (!rows.length) return { n: 0, p: 0, scope };
   const typical = rows.map((x) => x.kpl).sort((a, b) => a - b)[Math.floor(rows.length / 2)];
   let sw = 0; let sp = 0; let similar = 0;
