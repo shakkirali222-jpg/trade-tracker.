@@ -332,3 +332,28 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
   .sheet-wrap { align-items: center; }
 }
 .kpi.primary .muted { color: inherit; opacity: .8; }
+
+/* ---------- v2 additions ---------- */
+.big-input { font-size: 22px; font-weight: 800; color: var(--accent); }
+.calc-box { align-items: flex-end; }
+.progress { height: 8px; background: var(--surface-2); border-radius: 999px; overflow: hidden; margin: 10px 0; }
+.progress i { display: block; height: 100%; width: 3%; background: var(--primary); transition: width .3s; }
+.scan-rows { display: flex; flex-direction: column; gap: 8px; }
+.scan-row { display: flex; gap: 12px; align-items: center; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 10px 12px; cursor: pointer; }
+.scan-row input { width: 22px; height: 22px; accent-color: var(--accent); flex: none; }
+.ocr-text { white-space: pre-wrap; font-size: 12px; max-height: 200px; overflow: auto; background: var(--surface-2); padding: 8px; border-radius: 8px; }
+.chips.wrap { flex-wrap: wrap; overflow: visible; }
+.chip .chip-x { border: 0; background: transparent; color: var(--muted); padding: 0 0 0 6px; vertical-align: middle; cursor: pointer; }
+.chip .chip-x svg { width: 14px; height: 14px; }
+.card h3 > svg { width: 18px; height: 18px; color: var(--primary-2); margin-right: -2px; }
+.card h3:has(> svg) { justify-content: flex-start; }
+.outlook .rank li { cursor: default; }
+.bar { height: 6px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--primary-2); }
+.credit { text-align: center; font-size: 12px; color: var(--muted); margin: 18px 0 4px; letter-spacing: .02em; }
+.credit b { color: var(--primary); }
+.about { text-align: center; }
+.about .logo-big { width: 56px; height: 56px; margin: 4px auto 8px; border-radius: 16px; background: var(--primary); color: var(--on-primary); display: flex; align-items: center; justify-content: center; }
+.about .logo-big svg { width: 32px; height: 32px; }
+.about .designer { margin: 14px 0 6px; font-size: 13px; color: var(--muted); }
+.about .designer b { font-size: 17px; color: var(--text); letter-spacing: .03em; }

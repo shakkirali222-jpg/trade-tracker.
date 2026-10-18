@@ -32,6 +32,8 @@ const ICON = {
   log: '<svg viewBox="0 0 24 24"><ellipse cx="7" cy="12" rx="4" ry="6"/><path d="M7 6h12a4 6 0 0 1 0 12H7"/><ellipse cx="7" cy="12" rx="1.5" ry="2.5"/></svg>',
   download: '<svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>',
   upload: '<svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>',
+  scan: '<svg viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2M7 12h10"/></svg>',
+  bell: '<svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0"/></svg>',
   wave: '<svg viewBox="0 0 24 24"><path d="M2 12h2M6 8v8M10 5v14M14 8v8M18 10v4M22 12h0"/></svg>',
 };
 
@@ -45,7 +47,11 @@ const DEFAULT_SETTINGS = {
   voiceLang: 'en-IN',
   theme: 'auto',
   lastBackup: null,
+  woodTypes: null,
+  priceAlerts: false,
+  lastAlertDay: '',
 };
+const DESIGNER = 'Shakkir Ali';
 let settings = loadSettings();
 function loadSettings() {
   try { return { ...DEFAULT_SETTINGS, ...JSON.parse(localStorage.getItem('lb-settings') || '{}') }; } catch { return { ...DEFAULT_SETTINGS }; }
@@ -182,14 +188,15 @@ function countBuckets(start, end, unit) {
   while (d < end && n < 2000) { n++; d = addUnit(d, unit, 1); }
   return n;
 }
-function groupByParty(list, key) {
+function groupByParty(list, key) { return groupRows(list, (o) => o[key], partyName); }
+function groupRows(list, keyFn, nameFn) {
   const m = new Map();
   for (const o of list) {
-    const id = o[key];
+    const id = keyFn(o);
     if (!m.has(id)) m.set(id, []);
     m.get(id).push(o);
   }
-  return [...m.entries()].map(([id, os]) => ({ id, name: partyName(id), ...summarize(os), orders: os }))
+  return [...m.entries()].map(([id, os]) => ({ id, name: nameFn(id), ...summarize(os), orders: os }))
     .map((r) => ({ ...r, price: pricePer(r.total, r.kg) }))
     .sort((a, b) => b.total - a.total);
 }
@@ -322,7 +329,8 @@ function renderHome(view) {
           <a class="btn primary" href="#new">${ICON.plus} Add first order</a>
         </div>
         <p class="small" style="margin-top:16px">Want to look around first? <a href="#" id="demoLink">Load sample data</a> (you can delete it later in Settings).</p>
-      </div>`;
+      </div>
+      ${creditHtml()}`;
     $('#demoLink').onclick = async (e) => { e.preventDefault(); await loadDemoData(); route(); };
     return;
   }
@@ -368,6 +376,7 @@ function renderHome(view) {
       <h3>Sales & brokerage <small>${{ day: 'last 14 days', week: 'last 12 weeks', month: 'last 12 months', year: 'last 6 years' }[unit]}</small></h3>
       <div class="chart-box"><canvas id="dashChart"></canvas></div>
     </div>
+    ${outlookCard(usedWoods(), { onlyMoves: true })}
     <a class="card item" href="#orders" id="pendingCard" style="text-decoration:none;color:inherit">
       <div class="avatar" style="color:var(--warn)">${ICON.alert}</div>
       <div class="main"><div class="title">Brokerage to collect</div><div class="sub">${all.pendingCount} order${all.pendingCount === 1 ? '' : 's'} not yet received · all time</div></div>
@@ -384,7 +393,8 @@ function renderHome(view) {
     <div class="card">
       <h3>Recent orders <a class="small" href="#orders">See all</a></h3>
       ${recent.map(orderItem).join('')}
-    </div>`;
+    </div>
+    ${creditHtml()}`;
 
   $$('#dashUnit button').forEach((b) => b.onclick = () => { state.dash = { unit: b.dataset.u, offset: 0 }; route(); });
   $('#prevP').onclick = () => { state.dash.offset--; route(); };
@@ -650,6 +660,45 @@ async function deleteOrder(o) {
    ========================================================= */
 const WOOD_TYPES = ['Rubber', 'Eucalyptus', 'Acacia', 'Mango', 'Albizia', 'Silver oak', 'Jungle wood', 'Poplar', 'Teak', 'Casuarina', 'Matti'];
 
+// Wood list = your saved list + any wood already used in orders.
+function getWoods() {
+  const seen = new Set(); const out = [];
+  for (const w of [...(settings.woodTypes || WOOD_TYPES), ...state.orders.map((o) => o.woodType).filter(Boolean)]) {
+    const k = w.toLowerCase();
+    if (!seen.has(k)) { seen.add(k); out.push(w); }
+  }
+  return out;
+}
+const woodOpts = (sel) => '<option value="">Select wood…</option>' + getWoods().map((w) => `<option value="${esc(w)}" ${w === sel ? 'selected' : ''}>${esc(w)}</option>`).join('');
+function saveWoodType(name) {
+  name = String(name || '').trim().replace(/\s+/g, ' ');
+  if (!name) return null;
+  name = name[0].toUpperCase() + name.slice(1);
+  const existing = getWoods().find((w) => w.toLowerCase() === name.toLowerCase());
+  if (existing) return existing;
+  settings.woodTypes = [...(settings.woodTypes || WOOD_TYPES), name];
+  saveSettings();
+  return name;
+}
+function addWoodType(onSaved) {
+  const body = openSheet(`
+    <h2>New wood type</h2>
+    <form id="wform" novalidate autocomplete="off">
+      <div class="field"><label for="wName">Wood name</label><input class="input" id="wName" placeholder="e.g. Maruthi, Anjili, Wild jack"></div>
+      <button type="submit" class="btn primary block">${ICON.check} Add</button>
+    </form>`);
+  setTimeout(() => $('#wName', body)?.focus(), 250);
+  $('#wform', body).onsubmit = (e) => {
+    e.preventDefault();
+    const name = saveWoodType($('#wName', body).value);
+    if (!name) { toast('Enter a wood name'); return; }
+    closeSheet();
+    toast(`${name} added`);
+    onSaved?.(name);
+  };
+}
+const creditHtml = () => `<p class="credit">Designed &amp; developed by <b>${DESIGNER}</b></p>`;
+
 function renderOrderForm(view, editId) {
   const existing = editId ? state.orders.find((o) => o.id === editId) : null;
   if (editId && !existing) { view.innerHTML = '<div class="empty"><h2>Order not found</h2></div>'; return; }
@@ -666,12 +715,16 @@ function renderOrderForm(view, editId) {
   let totalManual = !!existing && !(num(o.weight) && num(o.rate));
   let dirty = false;
 
-  const woods = [...new Set([...state.orders.map((x) => x.woodType).filter(Boolean), ...WOOD_TYPES])];
   const opt = (type, sel) => `<option value="">Select ${type}…</option>` + parties(type).map((p) => `<option value="${esc(p.id)}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)}${p.place ? ' – ' + esc(p.place) : ''}</option>`).join('');
   const speechOK = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
 
   view.innerHTML = `
     <form id="orderForm" novalidate autocomplete="off">
+      <div class="voice-box">
+        <div class="row"><div class="grow"><b>Scan weight slip</b><div class="small muted">Take a photo – weight, vehicle, date and party fill in automatically</div></div>
+        <button type="button" class="btn sm primary" id="scanBtn">${ICON.scan} Scan</button></div>
+        <input type="file" id="scanInput" accept="image/*" hidden>
+      </div>
       ${speechOK && !existing ? `
       <div class="voice-box">
         <div class="row"><div class="grow"><b>Speak the order</b><div class="small muted">e.g. “Supplier Rahim, buyer Greenply, rubber 12 ton rate 6500”</div></div>
@@ -690,9 +743,9 @@ function renderOrderForm(view, editId) {
         <select class="input" id="fBuyer" required>${opt('buyer', o.buyerId)}</select>
       </div>
 
-      <div class="field"><label for="fWood">Wood type</label>
-        <input class="input" id="fWood" list="woodList" value="${esc(o.woodType)}" placeholder="Rubber, Eucalyptus…">
-        <datalist id="woodList">${woods.map((w) => `<option value="${esc(w)}">`).join('')}</datalist>
+      <div class="field">
+        <div class="label-row"><label for="fWood">Wood type</label><button type="button" class="btn sm ghost" id="addWood">${ICON.plus} New</button></div>
+        <select class="input" id="fWood">${woodOpts(o.woodType)}</select>
       </div>
 
       <div class="grid2">
@@ -713,15 +766,16 @@ function renderOrderForm(view, editId) {
       </div>
 
       <div class="calc-box">
-        <div>
-          <div class="small muted">My brokerage</div>
-          <div class="big" id="commOut">${money(0)}</div>
+        <div class="grow">
+          <label class="small muted" for="fComm">My brokerage (${esc(settings.currency)})</label>
+          <input class="input big-input" id="fComm" type="number" inputmode="decimal" step="any" min="0" value="${esc(o.commission ?? '')}" placeholder="0">
         </div>
-        <div style="width:110px">
-          <label class="small muted" for="fPct">Rate %</label>
+        <div style="width:100px">
+          <label class="small muted" for="fPct">Percent %</label>
           <input class="input" id="fPct" type="number" inputmode="decimal" step="any" min="0" value="${esc(o.commissionPct)}">
         </div>
       </div>
+      <div class="hint" id="commHint" style="margin:-6px 0 8px"></div>
       <div class="switch-row"><span>Brokerage already received</span>
         <label class="switch"><input type="checkbox" id="fRec" ${o.commissionReceived ? 'checked' : ''}><span></span></label>
       </div>
@@ -755,22 +809,115 @@ function renderOrderForm(view, editId) {
     </form>`;
 
   const f = $('#orderForm');
-  const el = { date: $('#fDate'), sup: $('#fSupplier'), buy: $('#fBuyer'), wood: $('#fWood'), weight: $('#fWeight'), unit: $('#fUnit'), rate: $('#fRate'), total: $('#fTotal'), pct: $('#fPct'), rec: $('#fRec'), vehicle: $('#fVehicle'), slipNo: $('#fSlipNo'), notes: $('#fNotes') };
+  const el = { date: $('#fDate'), sup: $('#fSupplier'), buy: $('#fBuyer'), wood: $('#fWood'), weight: $('#fWeight'), unit: $('#fUnit'), rate: $('#fRate'), total: $('#fTotal'), pct: $('#fPct'), comm: $('#fComm'), rec: $('#fRec'), vehicle: $('#fVehicle'), slipNo: $('#fSlipNo'), notes: $('#fNotes') };
 
-  function recalc() {
+  // Brokerage amount and % are linked: change one and the other follows.
+  function recalc(source) {
     const w = num(el.weight.value); const r = num(el.rate.value);
     if (!totalManual && w && r) el.total.value = round2(w * r);
     const t = num(el.total.value);
-    $('#commOut').textContent = money(round2((t * num(el.pct.value)) / 100));
+    if (source === 'comm') {
+      if (t > 0) el.pct.value = Math.round((num(el.comm.value) / t) * 100 * 1000) / 1000;
+    } else if (!(source === 'init' && el.comm.value !== '')) {
+      el.comm.value = t ? round2((t * num(el.pct.value)) / 100) : '';
+    }
+    $('#commHint').textContent = t ? `${nf.format(num(el.pct.value))}% of ${money(t)} = ${money(num(el.comm.value))}` : 'Enter the total amount to work out brokerage';
     $('#rateUnit').textContent = el.unit.value === 'ton' ? 'ton' : 'kg';
     $('#totalHint').textContent = w && r ? (totalManual ? `Weight × rate = ${money(w * r)} (you changed the total)` : `${nf.format(w)} × ${money(r)}`) : '';
   }
   [el.weight, el.rate].forEach((i) => i.addEventListener('input', () => { totalManual = false; recalc(); }));
-  el.unit.addEventListener('change', recalc);
+  el.unit.addEventListener('change', () => recalc());
   el.total.addEventListener('input', () => { totalManual = true; recalc(); });
-  el.pct.addEventListener('input', recalc);
+  el.pct.addEventListener('input', () => recalc());
+  el.comm.addEventListener('input', () => recalc('comm'));
   f.addEventListener('input', () => { dirty = true; });
-  recalc();
+  f.addEventListener('change', () => { dirty = true; });
+  recalc('init');
+
+  $('#addWood').onclick = () => addWoodType((w) => { el.wood.innerHTML = woodOpts(w); dirty = true; });
+
+  // ---- Scan weight slip ----
+  $('#scanBtn').onclick = () => $('#scanInput').click();
+  $('#scanInput').onchange = async (e) => {
+    const file = e.target.files[0];
+    e.target.value = '';
+    if (!file) return;
+    const myRoute = location.hash;
+    const blob = await compressImage(file, 2200, 0.85);
+    slips.push({ blob, name: file.name || 'weight-slip.jpg' });
+    dirty = true;
+    drawSlips();
+    const sheet = openSheet(`<h2>${ICON.scan} Reading weight slip…</h2>
+      <p class="small muted" id="ocrStatus">Starting scanner…</p><div class="progress"><i id="ocrBar"></i></div>
+      <p class="small muted">The photo is attached to this order.</p>`);
+    let text = '';
+    try {
+      text = await ocrImage(blob, (p, msg) => {
+        const st = $('#ocrStatus', sheet); if (st) st.textContent = msg;
+        const bar = $('#ocrBar', sheet); if (bar && p != null) bar.style.width = Math.round(p * 100) + '%';
+      });
+    } catch (err) {
+      if (location.hash !== myRoute) return;
+      openSheet(`<h2>Couldn’t read the slip</h2><p>${esc(err.message || err)}</p><p class="small muted">The photo is still attached. Please fill the details by hand.</p><button class="btn block" data-close>OK</button>`);
+      return;
+    }
+    if (location.hash !== myRoute) return;
+    showScanResult(parseSlip(text), text);
+  };
+  function showScanResult(found, text) {
+    const rows = [];
+    if (found.date) rows.push(['date', 'Date', fmtDate(found.date)]);
+    if (found.supplier) rows.push(['supplier', 'Supplier', found.supplier.name]);
+    else if (found.newSupplier) rows.push(['newSupplier', 'Supplier (new – will be added)', found.newSupplier]);
+    if (found.buyer) rows.push(['buyer', 'Buyer', found.buyer.name]);
+    else if (found.newBuyer) rows.push(['newBuyer', 'Buyer (new – will be added)', found.newBuyer]);
+    if (found.wood) rows.push(['wood', 'Wood', found.wood]);
+    else if (found.newWood) rows.push(['newWood', 'Wood (new – will be added)', found.newWood]);
+    if (found.weight) rows.push(['weight', 'Net weight', `${nf.format(found.weight)} ${found.unit}` + (found.gross && found.tare ? ` <span class="muted small">(gross ${nf.format(found.gross)} − tare ${nf.format(found.tare)})</span>` : '')]);
+    if (found.rate) rows.push(['rate', 'Rate', money(found.rate)]);
+    if (found.total) rows.push(['total', 'Total amount', money(found.total)]);
+    if (found.vehicle) rows.push(['vehicle', 'Vehicle', found.vehicle]);
+    if (found.slipNo) rows.push(['slipNo', 'Slip no.', found.slipNo]);
+    const sheet = openSheet(`
+      <h2>${rows.length ? 'Found on the slip' : 'Nothing found'}</h2>
+      ${rows.length ? `<p class="small muted" style="margin-top:-6px">Untick anything that is wrong, then tap Fill.</p>
+      <div class="scan-rows">${rows.map(([k, l, v]) => `<label class="scan-row"><input type="checkbox" data-k="${k}" checked><span class="grow"><span class="small muted">${esc(l)}</span><br><b>${k === 'weight' ? v : esc(v)}</b></span></label>`).join('')}</div>`
+        : '<p>Couldn’t find the details. Try again with a straight, clear photo in good light. Handwritten slips are hard to read.</p>'}
+      <details class="small muted" style="margin:10px 0"><summary>Text read from photo</summary><pre class="ocr-text">${esc(text.trim() || '(no text)')}</pre></details>
+      <div class="btn-row">
+        <button class="btn" data-close>${rows.length ? 'Cancel' : 'OK'}</button>
+        ${rows.length ? `<button class="btn primary" id="scanApply">${ICON.check} Fill order</button>` : ''}
+      </div>`);
+    $('#scanApply', sheet)?.addEventListener('click', async () => {
+      const on = new Set($$('input[data-k]:checked', sheet).map((c) => c.dataset.k));
+      const addParty = async (type, name) => {
+        const ex = parties(type).find((p) => p.name.toLowerCase() === name.toLowerCase());
+        if (ex) return ex;
+        const rec = { id: uid(), type, name, phone: '', place: '', notes: 'Added from weight slip scan', createdAt: Date.now() };
+        await DB.put('parties', rec);
+        state.parties.push(rec);
+        state.parties.sort((a, b) => a.name.localeCompare(b.name));
+        return rec;
+      };
+      if (on.has('date')) el.date.value = found.date;
+      if (on.has('supplier')) el.sup.value = found.supplier.id;
+      if (on.has('newSupplier')) { const p = await addParty('supplier', found.newSupplier); el.sup.innerHTML = opt('supplier', p.id); }
+      if (on.has('buyer')) el.buy.value = found.buyer.id;
+      if (on.has('newBuyer')) { const p = await addParty('buyer', found.newBuyer); el.buy.innerHTML = opt('buyer', p.id); }
+      if (on.has('wood')) el.wood.innerHTML = woodOpts(found.wood);
+      if (on.has('newWood')) el.wood.innerHTML = woodOpts(saveWoodType(found.newWood));
+      if (on.has('weight')) { el.weight.value = found.weight; el.unit.value = found.unit; totalManual = false; }
+      if (on.has('rate')) { el.rate.value = found.rate; totalManual = false; }
+      if (on.has('total')) { el.total.value = found.total; totalManual = true; }
+      if (on.has('vehicle')) el.vehicle.value = found.vehicle;
+      if (on.has('slipNo')) el.slipNo.value = found.slipNo;
+      [el.sup, el.buy, el.total, el.date].forEach((i) => i.classList.remove('invalid'));
+      recalc();
+      dirty = true;
+      closeSheet();
+      toast(`Filled ${on.size} field${on.size === 1 ? '' : 's'} – please check`);
+    });
+  }
 
   // Add party inline
   $$('[data-addparty]', f).forEach((b) => b.onclick = () => editParty(null, b.dataset.addparty, (p) => {
@@ -924,7 +1071,7 @@ function renderOrderForm(view, editId) {
       rate: el.rate.value === '' ? '' : num(el.rate.value),
       total: round2(num(el.total.value)),
       commissionPct: num(el.pct.value),
-      commission: round2((num(el.total.value) * num(el.pct.value)) / 100),
+      commission: round2(num(el.comm.value)),
       commissionReceived: el.rec.checked,
       vehicleNo: el.vehicle.value.trim().toUpperCase(),
       slipNo: el.slipNo.value.trim(),
@@ -1053,7 +1200,7 @@ function applyVoiceOrder(raw, el) {
   const buy = findParty('buyer', '(?:buyer|company|to)');
   if (buy) { el.buy.value = buy.id; list.push('buyer'); }
 
-  const woods = [...new Set([...WOOD_TYPES, ...state.orders.map((o) => o.woodType).filter(Boolean)])];
+  const woods = getWoods();
   const wood = woods.find((w) => t.includes(w.toLowerCase()));
   if (wood) { el.wood.value = wood; list.push('wood'); }
 
@@ -1187,8 +1334,11 @@ function reportRange() {
 
 function renderReports(view) {
   const r = state.report;
+  const isWood = r.type === 'wood';
   const list = parties(r.type);
-  if (r.partyId !== 'all' && !list.some((p) => p.id === r.partyId)) {
+  const woodList = usedWoods();
+  if (isWood && !woodList.includes(r.partyId)) r.partyId = 'all';
+  if (!isWood && r.partyId !== 'all' && !list.some((p) => p.id === r.partyId)) {
     const p = partyById(r.partyId);
     if (p) r.type = p.type; else r.partyId = 'all';
   }
@@ -1208,11 +1358,12 @@ function renderReports(view) {
     <div class="seg" id="rType">
       <button data-t="supplier" class="${r.type === 'supplier' ? 'active' : ''}">Suppliers</button>
       <button data-t="buyer" class="${r.type === 'buyer' ? 'active' : ''}">Buyers</button>
+      <button data-t="wood" class="${isWood ? 'active' : ''}">Wood prices</button>
     </div>
     <div class="field">
-      <select class="input" id="rParty" aria-label="${r.type === 'supplier' ? 'Supplier' : 'Buyer'}">
-        <option value="all">All ${r.type === 'supplier' ? 'suppliers' : 'buyers'} – compare</option>
-        ${plist.map((p) => `<option value="${esc(p.id)}" ${p.id === r.partyId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
+      <select class="input" id="rParty" aria-label="${isWood ? 'Wood type' : r.type === 'supplier' ? 'Supplier' : 'Buyer'}">
+        <option value="all">All ${isWood ? 'wood types' : r.type === 'supplier' ? 'suppliers' : 'buyers'} – compare</option>
+        ${(isWood ? woodList.map((w) => ({ id: w, name: w })) : plist).map((p) => `<option value="${esc(p.id)}" ${p.id === r.partyId ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}
       </select>
     </div>
     <div class="chips" id="rRange">
@@ -1237,6 +1388,7 @@ function renderReports(view) {
   $$('#rUnit button').forEach((b) => b.onclick = () => { r.unit = b.dataset.u; route(); });
 
   const body = $('#rBody');
+  if (isWood) { renderWoodReport(body, unit, bStart, nB, ranged); return; }
   if (!plist.length) {
     body.innerHTML = `<div class="empty">${ICON.chart}<h2>No ${r.type === 'supplier' ? 'suppliers' : 'buyers'} yet</h2><p>Add orders to see charts here.</p></div>`;
     return;
@@ -1338,6 +1490,81 @@ function renderReports(view) {
   });
 }
 
+/* ---------- Wood price report ---------- */
+function renderWoodReport(body, unit, bStart, nB, ranged) {
+  const r = state.report;
+  const withW = ranged.filter((o) => o.woodType && orderKg(o) > 0);
+  const labels = bucketize([], unit, bStart, nB).map((b) => b.label);
+  const lineOpts = (yTitle) => ({
+    maintainAspectRatio: false, interaction: { mode: 'nearest', intersect: false },
+    plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } }, tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${c.raw == null ? '-' : money0(c.raw) + priceLabel()}` } } },
+    scales: { y: { ticks: { callback: moneyTick, maxTicksLimit: 6 }, title: { display: true, text: yTitle } }, x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } } },
+  });
+
+  if (r.partyId === 'all') {
+    const rows = groupRows(withW, (o) => o.woodType, (w) => w);
+    body.innerHTML = `
+      ${outlookCard(usedWoods())}
+      ${rows.length ? `
+      <div class="card"><h3>Price ${priceLabel()} by wood type</h3><div class="chart-box tall"><canvas id="cWood"></canvas></div></div>
+      <div class="card"><h3>Wood types <small>tap for details</small></h3>
+        <div class="table-wrap"><table class="tbl"><thead><tr><th>Wood</th><th class="num">Orders</th><th class="num">Weight</th><th class="num">Avg ${priceLabel()}</th><th class="num">Low</th><th class="num">High</th></tr></thead><tbody>
+        ${rows.map((x) => {
+          const ps = x.orders.map((o) => pricePer(num(o.total), orderKg(o))).filter((v) => v);
+          return `<tr data-party="${esc(x.id)}"><td><b>${esc(x.name)}</b></td><td class="num">${x.count}</td><td class="num">${fmtWeight(x.kg)}</td><td class="num">${money0(x.price)}</td><td class="num">${money0(Math.min(...ps))}</td><td class="num">${money0(Math.max(...ps))}</td></tr>`;
+        }).join('')}
+        </tbody></table></div></div>` : `<div class="empty">${ICON.chart}<h2>No wood prices in this range</h2><p>Choose a wood type and weight when adding orders.</p></div>`}`;
+    $$('tr[data-party]', body).forEach((tr) => tr.onclick = () => { r.partyId = tr.dataset.party; route(); });
+    if (!rows.length) return;
+    makeChart($('#cWood'), {
+      type: 'line',
+      data: { labels, datasets: rows.slice(0, 8).map((x, i) => ({ label: x.name, data: bucketize(x.orders, unit, bStart, nB).map((b) => b.price), borderColor: SERIES[i], backgroundColor: SERIES[i], spanGaps: true, tension: .3, pointRadius: 3 })) },
+      options: lineOpts('Price ' + priceLabel()),
+    });
+    return;
+  }
+
+  // One wood type
+  const wood = r.partyId;
+  const os = withW.filter((o) => o.woodType === wood).sort(sortOrdersDesc);
+  const s = summarize(os);
+  const ps = os.map((o) => pricePer(num(o.total), orderKg(o))).filter((v) => v);
+  const b = bucketize(os, unit, bStart, nB);
+  const bySup = groupByParty(os, 'supplierId').sort((a, c) => a.price - c.price);
+  const byBuy = groupByParty(os, 'buyerId').sort((a, c) => c.price - a.price);
+  const priceList = (rows, note) => rows.length ? `<ul class="rank">${rows.slice(0, 8).map((x) => `<li><div class="row"><span class="grow ellipsis"><b>${esc(x.name)}</b> <span class="muted small">· ${x.count} order${x.count === 1 ? '' : 's'} · ${fmtWeight(x.kg)}</span></span><b>${money0(x.price)}${priceLabel()}</b></div></li>`).join('')}</ul><p class="small muted" style="margin:6px 0 0">${note}</p>` : '<p class="muted small">No orders in this range.</p>';
+  body.innerHTML = `
+    <div class="kpis">
+      <div class="kpi primary"><div class="label">Avg price</div><div class="value">${s.kg ? money0(pricePer(s.total, s.kg)) : '—'}</div><div class="delta">${priceLabel()} · ${s.count} orders</div></div>
+      <div class="kpi"><div class="label">Weight</div><div class="value">${fmtWeight(s.kg)}</div></div>
+      <div class="kpi"><div class="label">Lowest</div><div class="value">${ps.length ? money0(Math.min(...ps)) : '—'}</div></div>
+      <div class="kpi"><div class="label">Highest</div><div class="value">${ps.length ? money0(Math.max(...ps)) : '—'}</div></div>
+    </div>
+    ${outlookCard([wood], { title: `${esc(wood)} · next 2–3 weeks` })}
+    <div class="card"><h3>${esc(wood)} price over time</h3><div class="chart-box tall"><canvas id="cWood1"></canvas></div></div>
+    <div class="card"><h3>Suppliers <small>cheapest first</small></h3>${priceList(bySup, 'Average price you got this wood from each supplier.')}</div>
+    <div class="card"><h3>Buyers <small>best paying first</small></h3>${priceList(byBuy, 'Average price each company paid for this wood.')}</div>`;
+  makeChart($('#cWood1'), {
+    type: 'bar',
+    data: {
+      labels: b.map((x) => x.label),
+      datasets: [
+        { type: 'line', label: 'Avg price', data: b.map((x) => x.price), borderColor: css('--accent'), backgroundColor: css('--accent'), yAxisID: 'y', spanGaps: true, tension: .3, pointRadius: 3, order: 1 },
+        { type: 'bar', label: 'Weight (t)', data: b.map((x) => round2(x.kg / 1000)), backgroundColor: css('--primary-2') + '66', borderRadius: 5, yAxisID: 'yw', order: 2 },
+      ],
+    },
+    options: {
+      maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+      plugins: { legend: { position: 'bottom', labels: { boxWidth: 12 } }, tooltip: { callbacks: { label: (c) => (c.dataset.yAxisID === 'yw' ? `Weight: ${nf.format(c.raw)} t` : `Avg price: ${c.raw == null ? '-' : money0(c.raw) + priceLabel()}`) } } },
+      scales: {
+        y: { ticks: { callback: moneyTick, maxTicksLimit: 6 }, title: { display: true, text: 'Price ' + priceLabel() } },
+        yw: { position: 'right', beginAtZero: true, grid: { display: false }, ticks: { maxTicksLimit: 5 }, title: { display: true, text: 'Tons' } },
+        x: { grid: { display: false }, ticks: { maxRotation: 0, autoSkip: true } },
+      },
+    },
+  });
+}
+
 /* =========================================================
    Settings, backup & restore
    ========================================================= */
@@ -1375,6 +1602,19 @@ function renderSettings(view) {
     </div>
 
     <div class="card">
+      <h3>Wood types</h3>
+      <div class="chips wrap" id="woodChips">${(settings.woodTypes || WOOD_TYPES).map((w) => `<span class="chip">${esc(w)}<button class="chip-x" data-rmwood="${esc(w)}" aria-label="Remove ${esc(w)}">${ICON.x}</button></span>`).join('')}</div>
+      <button class="btn sm" id="sAddWood">${ICON.plus} Add wood type</button>
+    </div>
+
+    <div class="card">
+      <h3>Price alerts</h3>
+      <div class="switch-row" style="padding-top:0"><span>Notify me when wood prices may go up or down<br><span class="small muted">Starts after 1 year of orders. Checked each day when you open the app.</span></span>
+        <label class="switch"><input type="checkbox" id="sAlerts" ${settings.priceAlerts ? 'checked' : ''}><span></span></label></div>
+      ${'Notification' in window ? '' : '<p class="small muted" style="margin:0">On iPhone, phone notifications work only when the app is opened from its Home Screen icon. Alerts still show on the Home page.</p>'}
+    </div>
+
+    <div class="card">
       <h3>Data</h3>
       <div class="btn-row">
         <button class="btn" id="bDemo">Load sample data</button>
@@ -1382,8 +1622,12 @@ function renderSettings(view) {
       </div>
     </div>
 
-    <div class="card small muted">
-      <b style="color:var(--text)">Log Broker</b> · works offline. Install it: open the browser menu and choose “Add to Home screen”.
+    <div class="card about">
+      <div class="logo-big">${ICON.log}</div>
+      <div style="font-weight:800;font-size:17px">Log Broker</div>
+      <div class="small muted">Wood logs order book &amp; price tracker · works offline</div>
+      <div class="designer">Designed &amp; developed by<br><b>${DESIGNER}</b></div>
+      <div class="small muted">© ${new Date().getFullYear()} ${DESIGNER}. All rights reserved.</div>
     </div>`;
 
   const bind = (id, k, conv = (v) => v) => { $(id).onchange = (e) => { settings[k] = conv(e.target.value); saveSettings(); if (k === 'theme') applyTheme(); toast('Saved'); }; };
@@ -1394,6 +1638,24 @@ function renderSettings(view) {
   bind('#sTheme', 'theme');
   bind('#sLang', 'voiceLang');
 
+  $('#sAddWood').onclick = () => addWoodType(() => route());
+  $$('[data-rmwood]').forEach((b) => b.onclick = () => {
+    settings.woodTypes = (settings.woodTypes || WOOD_TYPES).filter((w) => w !== b.dataset.rmwood);
+    saveSettings();
+    toast(`${b.dataset.rmwood} removed from the list`);
+    route();
+  });
+  $('#sAlerts').onchange = async (e) => {
+    const want = e.target.checked;
+    if (want && 'Notification' in window && Notification.permission !== 'granted') {
+      const res = await Notification.requestPermission().catch(() => 'denied');
+      if (res !== 'granted') toast('Notifications are blocked – alerts will show on the Home page only');
+    }
+    settings.priceAlerts = want;
+    settings.lastAlertDay = '';
+    saveSettings();
+    if (want) maybeNotifyOutlook();
+  };
   $('#bBackup').onclick = backup;
   $('#bRestore').onclick = () => $('#restoreFile').click();
   $('#restoreFile').onchange = (e) => { const file = e.target.files[0]; e.target.value = ''; if (file) restore(file); };
@@ -1526,4 +1788,5 @@ if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.
     return;
   }
   route();
+  setTimeout(maybeNotifyOutlook, 1500);
 })();

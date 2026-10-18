@@ -1,7 +1,7 @@
 // Offline support: cache the app shell, serve it when there is no network.
-const CACHE = 'log-broker-v1';
+const CACHE = 'log-broker-v2';
 const ASSETS = [
-  './', './index.html', './css/style.css', './js/db.js', './js/app.js', './vendor/chart.umd.js',
+  './', './index.html', './css/style.css', './js/db.js', './js/smart.js', './js/app.js', './vendor/chart.umd.js',
   './manifest.webmanifest', './icons/icon.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/maskable-512.png',
 ];
 
@@ -26,4 +26,13 @@ self.addEventListener('fetch', (e) => {
       })
       .catch(() => caches.match(e.request, { ignoreSearch: true }).then((r) => r || caches.match('./index.html'))),
   );
+});
+
+// Tapping a price alert opens the app.
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: 'window' }).then((list) => {
+    const c = list.find((w) => 'focus' in w);
+    return c ? c.focus() : self.clients.openWindow('./#reports');
+  }));
 });

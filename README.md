@@ -7,9 +7,10 @@ It is a single-user web app that installs on the phone ("Add to Home screen"), w
 ## Features
 
 **Orders**
-- Date, supplier and buyer (pick from the list or add a new one right there), wood type, weight (ton/kg), rate.
+- Date, supplier and buyer (pick from the list or add a new one right there), wood type (pick from the list or add a new one), weight (ton/kg), rate.
+- **Scan weight slip**: take a photo of the weighbridge slip and the app reads the net weight (or gross − tare), vehicle number, date, slip number, party and wood, fills the order and attaches the photo. Runs on the phone (bundled Tesseract OCR); works best on clear printed slips.
 - Total = weight × rate automatically, or type the total yourself.
-- Brokerage is calculated automatically (default **1%**, changeable per order and in Settings).
+- Brokerage is calculated automatically (default **1%**). The brokerage amount and % are linked: type either one and the other updates.
 - Mark brokerage as received or pending, and see how much brokerage is still to collect.
 - Weight slip photos (camera or gallery, several per order; images are compressed to save space) and a slip number.
 - Vehicle number and notes.
@@ -25,6 +26,10 @@ It is a single-user web app that installs on the phone ("Add to Home screen"), w
 - Top suppliers and buyers for the period.
 - Reports per supplier or buyer: sales and average price per ton over time (daily, weekly, monthly or yearly, any date range); who they traded with; their order list.
 - Compare all suppliers or all buyers: price trend lines, stacked sales and a ranking table.
+
+**Wood prices and price alerts**
+- Reports → Wood prices: price per ton of each wood type by day, week, month or year; lowest and highest price; cheapest suppliers and best-paying buyers for each wood.
+- After 1 year of orders, the app predicts whether each wood's price may go up or down in the next 2–3 weeks. The forecast uses how prices moved at the same time in earlier years plus the last 4 weeks' trend. It shows on the Home page and, if turned on, as a phone notification.
 
 **Everyday things**
 - Supplier/buyer contacts with Call and WhatsApp buttons.
@@ -50,4 +55,10 @@ To use it on a phone, host the folder on any HTTPS static host (for example GitH
 - `js/db.js` – IndexedDB storage
 - `js/app.js` – screens, charts, voice, backup
 - `sw.js`, `manifest.webmanifest`, `icons/` – install and offline support
+- `js/smart.js` – weight slip scanning and price outlook
 - `vendor/chart.umd.js` – Chart.js 4.4.6 (MIT), bundled so charts work offline
+- `vendor/ocr/` – Tesseract.js 5.1.1 + English data (Apache 2.0), used for slip scanning
+
+---
+
+Designed & developed by **Shakkir Ali**.
