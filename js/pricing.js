@@ -12,6 +12,69 @@ const sizeName = (k) => (LOG_SIZES.find((s) => s[0] === k) || ['', ''])[1];
 const LOG_LENGTHS = [['8ft', '8 ft single'], ['2x4ft', '2 × 4 ft pieces']];
 const lengthName = (k) => (LOG_LENGTHS.find((s) => s[0] === k) || ['', ''])[1];
 
+// Three photos of the loaded vehicle. The back shows the cut ends (log thickness) best.
+const WOOD_SIDES = [['left', 'Left side'], ['right', 'Right side'], ['back', 'Back (cut ends)']];
+const SIDE_WEIGHT = { back: 0.5, left: 0.25, right: 0.25 };
+
+// Photo slots UI. slots = { left: {blob, feats, id?}, ... }; removed collects replaced saved file ids.
+async function sidePhotoSlots(host, slots, { onChange, removed } = {}) {
+  for (const [side] of WOOD_SIDES) {
+    const sl = slots[side];
+    if (sl && !sl.blob && sl.id) sl.blob = (await DB.get('files', sl.id))?.blob;
+  }
+  if (!host.isConnected) return;
+  host.innerHTML = `<div class="side-slots">${WOOD_SIDES.map(([side, label]) => {
+    const sl = slots[side];
+    if (sl?.blob) {
+      sl.url = blobUrl(sl.blob);
+      return `<div class="side-slot"><div class="thumb side-thumb" data-view="${side}"><img src="${sl.url}" alt="${label}">
+        <button type="button" class="x" data-rm="${side}" aria-label="Remove">${ICON.x}</button></div><span>${label}</span></div>`;
+    }
+    return `<div class="side-slot"><button type="button" class="thumb side-thumb add" data-add="${side}">${ICON.camera}<span>Add photo</span></button><span>${label}</span></div>`;
+  }).join('')}</div><input type="file" accept="image/*" hidden data-file>`;
+  const input = $('[data-file]', host);
+  let target = null;
+  const again = () => sidePhotoSlots(host, slots, { onChange, removed });
+  $$('[data-add]', host).forEach((b) => b.onclick = () => { target = b.dataset.add; input.click(); });
+  $$('[data-view]', host).forEach((t) => t.onclick = () => openLightbox(slots[t.dataset.view].url));
+  $$('[data-rm]', host).forEach((b) => b.onclick = (e) => {
+    e.stopPropagation();
+    const sl = slots[b.dataset.rm];
+    if (sl?.id) removed?.push(sl.id);
+    delete slots[b.dataset.rm];
+    onChange?.(); again();
+  });
+  input.onchange = async (e) => {
+    const f = e.target.files[0];
+    e.target.value = '';
+    if (!f || !target) return;
+    const blob = await compressImage(f);
+    let feats = null;
+    try { feats = await imageFeatures(blob); } catch { /* not an image */ }
+    const old = slots[target];
+    if (old?.id) removed?.push(old.id);
+    slots[target] = { blob, feats, name: `wood-${target}.jpg` };
+    onChange?.(); again();
+  };
+}
+
+// Compare the new load's photos with a past order's photos, side by side.
+function loadSim(query, o) {
+  if (!o.woodFeats) return null;
+  const pics = Object.entries(o.woodFeats).map(([id, f]) => ({ id, f, side: o.woodSides?.[id] || 'other' }));
+  if (!pics.length) return null;
+  let tw = 0; let ts = 0; let sides = 0;
+  for (const [side, w] of Object.entries(SIDE_WEIGHT)) {
+    const q = query[side];
+    if (!q) continue;
+    let best = 0;
+    for (const p of pics) best = Math.max(best, photoSim(q, p.f) * (p.side === side ? 1 : p.side === 'other' ? 0.95 : 0.85));
+    tw += w; ts += w * best; sides++;
+  }
+  if (!tw) return null;
+  return { sim: ts / tw, sides, fileId: (pics.find((p) => p.side === 'back') || pics[0]).id };
+}
+
 // How past orders with the same value of a field sold compared with the market.
 function learnPremium(field, value, wood) {
   let list = state.orders.filter((o) => o[field] === value && o.woodType === wood);
@@ -93,7 +156,10 @@ function orderPremium(o) {
 }
 const mean = (a) => a.reduce((x, y) => x + y, 0) / (a.length || 1);
 
-function priceSuggestion({ wood, logSize, logLength, feats }) {
+function priceSuggestion({ wood, logSize, logLength, photos }) {
+  const query = {};
+  for (const [side] of WOOD_SIDES) if (photos?.[side]?.feats) query[side] = photos[side].feats;
+  const nSides = Object.keys(query).length;
   if (!wood) return { ready: false, reason: 'Choose the wood type.' };
   const ol = priceOutlook(wood);
   if (!ol.ready || !ol.current) return { ready: false, reason: `No bills with ${wood} yet. Add a few ${wood} orders with weight and price, and the app will start suggesting prices.` };
@@ -121,27 +187,34 @@ function priceSuggestion({ wood, logSize, logLength, feats }) {
       : { icon: '📐', label: lengthName(logLength), text: 'No past orders with this length yet – it learns as you mark length on orders', pct: 0 });
   }
 
-  // Photo: find past loads that look similar.
-  let photoP = 0; let similar = [];
-  if (feats) {
+  // Photos: find past loads that look similar, comparing each side with the same side.
+  let photoP = 0; let similar = []; let sizeHint = null;
+  if (nSides) {
     const cands = [];
     for (const o of state.orders) {
-      if (!o.woodFeats) continue;
-      let best = 0; let fileId = null;
-      for (const [fid, f] of Object.entries(o.woodFeats)) { const s = photoSim(feats, f); if (s > best) { best = s; fileId = fid; } }
-      if (!fileId) continue;
-      cands.push({ o, sim: best, rank: best + (o.woodType === wood ? 0.05 : 0) + (logLength && o.logLength === logLength ? 0.03 : 0), fileId, prem: orderPremium(o) });
+      const m = loadSim(query, o);
+      if (!m) continue;
+      cands.push({ o, sim: m.sim, rank: m.sim + (o.woodType === wood ? 0.05 : 0) + (logLength && o.logLength === logLength ? 0.03 : 0), fileId: m.fileId, prem: orderPremium(o) });
     }
-    cands.sort((a, b) => b.rank - a.rank);
+    cands.sort((x, y) => y.rank - x.rank);
     similar = cands.slice(0, 3);
     const use = cands.filter((c) => c.prem != null && c.sim >= 0.6 && c.o.woodType === wood).slice(0, 5);
     if (use.length) {
-      let sw = 0; let s = 0;
-      use.forEach((c) => { const w = (c.sim - 0.5) ** 2; sw += w; s += w * c.prem; });
-      photoP = (s / sw) * (use.length / (use.length + 2));
-      factors.push({ icon: '📷', label: 'Photo', text: `Looks like ${use.length} past ${wood} load${use.length === 1 ? '' : 's'} that sold ${sgn((s / sw) * 100)} vs market`, pct: photoP * 100 * (logSize ? 0.6 : 1) });
+      let sw = 0; let sp = 0;
+      use.forEach((c) => { const w = (c.sim - 0.5) ** 2; sw += w; sp += w * c.prem; });
+      photoP = (sp / sw) * (use.length / (use.length + 2)) * (0.7 + 0.1 * nSides);
+      factors.push({ icon: '📷', label: 'Photos', text: `${nSides} side${nSides === 1 ? '' : 's'} compared · looks like ${use.length} past ${wood} load${use.length === 1 ? '' : 's'} that sold ${sgn((sp / sw) * 100)} vs market`, pct: photoP * 100 * (logSize ? 0.6 : 1) });
     } else {
-      factors.push({ icon: '📷', label: 'Photo', text: cands.length ? `No close match among ${cands.length} past load photos yet` : 'No past load photos yet – add wood photos to your orders to learn', pct: 0 });
+      factors.push({ icon: '📷', label: 'Photos', text: cands.length ? `No close match among ${cands.length} past loads with photos yet` : 'No past load photos yet – add the 3 photos to your orders to learn', pct: 0 });
+    }
+    // Guess log size from the closest past loads that have a size marked.
+    const voters = cands.filter((c) => c.o.logSize && c.sim >= 0.6).slice(0, 5);
+    if (voters.length >= 2) {
+      const tally = {};
+      voters.forEach((c) => { tally[c.o.logSize] = (tally[c.o.logSize] || 0) + c.sim; });
+      const [top, v] = Object.entries(tally).sort((x, y) => y[1] - x[1])[0];
+      const total = Object.values(tally).reduce((x, y) => x + y, 0);
+      if (v / total >= 0.6) sizeHint = top;
     }
   }
 
@@ -160,28 +233,28 @@ function priceSuggestion({ wood, logSize, logLength, feats }) {
   const confidence = score >= 3 ? 'High' : score >= 2 ? 'Medium' : 'Low';
   return {
     ready: true, wood, base, price, low: roundTo(price * (1 - spread)), high: roundTo(price * (1 + spread)),
-    prem, factors, similar, outlook: ol, confidence, in3w: roundTo(price * (1 + ol.pct / 100)),
+    prem, factors, similar, sizeHint, outlook: ol, confidence, in3w: roundTo(price * (1 + ol.pct / 100)),
   };
 }
 
 /* ---------- Price check screen ---------- */
 function renderPriceCheck(view) {
   const woods = usedWoods();
-  const pc = state.priceCheck || (state.priceCheck = { wood: woods[0] || '', logSize: '', logLength: '8ft', weight: '', unit: settings.defaultUnit, photo: null, feats: null });
+  const pc = state.priceCheck || (state.priceCheck = { wood: woods[0] || '', logSize: '', logLength: '8ft', weight: '', unit: settings.defaultUnit, photos: {} });
   if (pc.logLength === undefined) pc.logLength = '8ft';
+  if (!pc.photos) pc.photos = {};
   view.innerHTML = `
     <div class="card">
-      <p class="small muted" style="margin-top:0">Take a photo of the logs loaded on the lorry and choose the wood. The app suggests a price from your past orders, the log size and today's market.</p>
+      <p class="small muted" style="margin-top:0">Take 3 photos of the loaded lorry – left side, right side and back (cut ends) – and choose the wood. The app suggests a price from your past orders, the log size and today's market.</p>
       <div class="field"><label for="pcWood">Wood type</label><select class="input" id="pcWood">${woodOpts(pc.wood)}</select></div>
+      <div class="field"><label>Photos of the load</label>
+        <div id="pcPhotos"></div>
+      </div>
       <div class="field"><label>Log size (girth)</label>
         <div class="seg" id="pcSize" style="margin:0">${LOG_SIZES.map(([k, l]) => `<button type="button" data-s="${k}" class="${pc.logSize === k ? 'active' : ''}">${k ? l : '—'}</button>`).join('')}</div></div>
+        <div class="hint">Small = thin logs, Big = thick logs (girth). Thick logs usually sell higher per ton.</div></div>
       <div class="field"><label>Log length</label>
         <div class="seg" id="pcLen" style="margin:0">${LOG_LENGTHS.map(([k, l]) => `<button type="button" data-l="${k}" class="${pc.logLength === k ? 'active' : ''}">${l}</button>`).join('')}</div></div>
-      <div class="field"><label>Photo of the load</label>
-        <div class="thumbs" id="pcPhoto"></div>
-        <input type="file" id="pcCam" accept="image/*" capture="environment" hidden>
-        <input type="file" id="pcGal" accept="image/*" hidden>
-      </div>
       <div class="field" style="margin-bottom:0"><label for="pcWeight">Weight (optional)</label>
         <div class="input-group">
           <input class="input" id="pcWeight" type="number" inputmode="decimal" step="any" min="0" value="${esc(pc.weight)}" placeholder="0">
@@ -190,36 +263,14 @@ function renderPriceCheck(view) {
     </div>
     <div id="pcResult"></div>`;
 
-  const drawPhoto = () => {
-    const box = $('#pcPhoto');
-    if (pc.photo) {
-      const u = blobUrl(pc.photo);
-      box.innerHTML = `<div class="thumb big-thumb" id="pcView"><img src="${u}" alt="Load photo"><button type="button" class="x" id="pcRm" aria-label="Remove">${ICON.x}</button></div>`;
-      $('#pcView').onclick = () => openLightbox(u);
-      $('#pcRm').onclick = (e) => { e.stopPropagation(); pc.photo = null; pc.feats = null; drawPhoto(); compute(); };
-    } else {
-      box.innerHTML = `<button type="button" class="thumb add" id="pcAddCam">${ICON.camera}<span>Camera</span></button>
-        <button type="button" class="thumb add" id="pcAddGal">${ICON.upload}<span>Gallery</span></button>`;
-      $('#pcAddCam').onclick = () => $('#pcCam').click();
-      $('#pcAddGal').onclick = () => $('#pcGal').click();
-    }
-  };
-  const onFile = async (e) => {
-    const file = e.target.files[0];
-    e.target.value = '';
-    if (!file) return;
-    pc.photo = await compressImage(file);
-    try { pc.feats = await imageFeatures(pc.photo); } catch { pc.feats = null; }
-    drawPhoto(); compute();
-  };
-  $('#pcCam').onchange = onFile;
-  $('#pcGal').onchange = onFile;
+  sidePhotoSlots($('#pcPhotos'), pc.photos, { onChange: () => compute() });
   $('#pcWood').onchange = (e) => { pc.wood = e.target.value; compute(); };
-  $$('#pcSize button').forEach((b) => b.onclick = () => {
-    pc.logSize = b.dataset.s;
-    $$('#pcSize button').forEach((x) => x.classList.toggle('active', x === b));
+  const setSize = (k) => {
+    pc.logSize = k;
+    $$('#pcSize button').forEach((x) => x.classList.toggle('active', x.dataset.s === k));
     compute();
-  });
+  };
+  $$('#pcSize button').forEach((b) => b.onclick = () => setSize(b.dataset.s));
   $$('#pcLen button').forEach((b) => b.onclick = () => {
     pc.logLength = b.dataset.l;
     $$('#pcLen button').forEach((x) => x.classList.toggle('active', x === b));
@@ -231,13 +282,14 @@ function renderPriceCheck(view) {
   function compute() {
     const box = $('#pcResult');
     if (!box) return;
-    const r = priceSuggestion({ wood: pc.wood, logSize: pc.logSize, logLength: pc.logLength, feats: pc.feats });
+    const r = priceSuggestion({ wood: pc.wood, logSize: pc.logSize, logLength: pc.logLength, photos: pc.photos });
     if (!r.ready) { box.innerHTML = `<div class="card empty" style="padding:20px">${ICON.chart}<p>${esc(r.reason)}</p></div>`; return; }
     const kg = pc.unit === 'ton' ? num(pc.weight) * 1000 : num(pc.weight);
     const perKgPrice = settings.priceUnit === 'ton' ? r.price / 1000 : r.price;
     const total = kg ? round2(perKgPrice * kg) : 0;
     const comm = round2((total * settings.commissionPct) / 100);
     box.innerHTML = `
+      ${r.sizeHint && !pc.logSize ? `<div class="banner hint-banner">📏<div class="grow">Photos look like <b>${sizeName(r.sizeHint)} logs</b> (from similar past loads).</div><button class="btn sm" id="pcUseSize">Use</button></div>` : ''}
       <div class="card price-card">
         <div class="small muted">Suggested price · ${esc(r.wood)}${pc.logSize ? ' · ' + sizeName(pc.logSize) + ' logs' : ''}${pc.logLength ? ' · ' + lengthName(pc.logLength) : ''}</div>
         <div class="price-big">${money0(r.price)}<span>${priceLabel()}</span></div>
@@ -255,6 +307,7 @@ function renderPriceCheck(view) {
           <div class="amt small">${Math.round(c.sim * 100)}%<div class="sub">alike</div></div></div>`;
       }).join('')}</div></div>` : ''}`;
     bindOrderItems(box);
+    $('#pcUseSize', box)?.addEventListener('click', () => setSize(r.sizeHint));
     r.similar.forEach(async (c, i) => {
       const f = await DB.get('files', c.fileId);
       const t = $('#sim' + i, box);
@@ -266,11 +319,10 @@ function renderPriceCheck(view) {
         woodType: r.wood, logSize: pc.logSize, logLength: pc.logLength, unit: pc.unit,
         weight: pc.weight === '' ? '' : num(pc.weight),
         rate: round2(pc.unit === 'ton' ? perTon : perTon / 1000),
-        woodPhoto: pc.photo, woodFeats: pc.feats,
+        woodPhotos: Object.fromEntries(Object.entries(pc.photos).map(([k, v]) => [k, { blob: v.blob, feats: v.feats, name: v.name }])),
       };
       location.hash = '#new';
     };
   }
-  drawPhoto();
   compute();
 }

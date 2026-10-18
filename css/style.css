@@ -382,3 +382,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 .why-list li > span { color: var(--muted); }
 .why-list li > span b { color: var(--text); }
 .why-list li > b { white-space: nowrap; }
+.side-slots { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.side-slot { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); text-align: center; }
+.side-thumb { width: 100%; height: auto; aspect-ratio: 4 / 3; }
+.hint-banner { background: var(--accent-soft); }

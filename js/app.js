@@ -606,7 +606,11 @@ async function showOrder(id) {
   const woodPics = (await Promise.all((o.woodPhotoIds || []).map((fid) => DB.get('files', fid)))).filter(Boolean);
   if (woodPics.length) {
     html += `<div class="section-title">Wood photos</div><div class="thumbs" style="margin-bottom:14px">`;
-    woodPics.forEach((f) => { const u = blobUrl(f.blob); html += `<div class="thumb" data-img="${u}"><img src="${u}" alt="Wood load"></div>`; });
+    woodPics.forEach((f) => {
+      const u = blobUrl(f.blob);
+      const side = (WOOD_SIDES.find((x) => x[0] === o.woodSides?.[f.id]) || [])[1];
+      html += `<div class="side-slot"><div class="thumb" data-img="${u}"><img src="${u}" alt="Wood load"></div>${side ? `<span>${side}</span>` : ''}</div>`;
+    });
     html += '</div>';
   }
   if (slips.length) {
@@ -736,8 +740,15 @@ function renderOrderForm(view, editId) {
   let logLength = o.logLength ?? (existing ? '' : '8ft'); // normal cut is 8 ft
   // Attachment working state
   const slips = (o.slipIds || []).map((id) => ({ id }));
-  const woodPhotos = (o.woodPhotoIds || []).map((id) => ({ id, feats: o.woodFeats?.[id] }));
-  if (pre?.woodPhoto) woodPhotos.push({ blob: pre.woodPhoto, feats: pre.woodFeats, name: 'wood-load.jpg' });
+  // Wood photos: left side, right side, back. Older photos without a side go to "other".
+  const woodSlots = {};
+  const woodOther = [];
+  for (const id of o.woodPhotoIds || []) {
+    const side = o.woodSides?.[id];
+    if (side && SIDE_WEIGHT[side] && !woodSlots[side]) woodSlots[side] = { id, feats: o.woodFeats?.[id] };
+    else woodOther.push({ id, feats: o.woodFeats?.[id] });
+  }
+  if (pre?.woodPhotos) Object.assign(woodSlots, pre.woodPhotos);
   const removedFiles = [];
   let audio = o.audioId ? { id: o.audioId } : null;
   let totalManual = !!existing && !(num(o.weight) && num(o.rate));
@@ -777,7 +788,7 @@ function renderOrderForm(view, editId) {
       </div>
       <div class="field"><label>Log size (girth)</label>
         <div class="seg" id="fSize" style="margin:0">${LOG_SIZES.map(([k, l]) => `<button type="button" data-s="${k}" class="${logSize === k ? 'active' : ''}">${k ? l : '—'}</button>`).join('')}</div>
-        <div class="hint">Helps Price check learn how log size affects price.</div></div>
+        <div class="hint">Small = thin logs, Big = thick logs. Thick logs usually get a better price per ton – Price check learns how much.</div></div>
       <div class="field"><label>Log length</label>
         <div class="seg" id="fLen" style="margin:0">${LOG_LENGTHS.map(([k, l]) => `<button type="button" data-l="${k}" class="${logLength === k ? 'active' : ''}">${l}</button>`).join('')}</div></div>
 
@@ -819,11 +830,12 @@ function renderOrderForm(view, editId) {
       </div>
 
       <div class="field">
-        <label>Wood photos (logs loaded on the vehicle)</label>
-        <div class="thumbs" id="woodThumbs"></div>
+        <label>Wood photos (loaded vehicle)</label>
+        <div id="woodSlots"></div>
+        <div class="thumbs" id="woodThumbs" style="margin-top:8px"></div>
         <input type="file" id="woodInput" accept="image/*" multiple hidden>
         <input type="file" id="woodCamera" accept="image/*" capture="environment" hidden>
-        <div class="hint">Used by Price check to compare future loads with this one.</div>
+        <div class="hint">Left side, right side and back (cut ends). Price check compares future loads with these.</div>
       </div>
 
       <div class="field">
@@ -1023,7 +1035,8 @@ function renderOrderForm(view, editId) {
     return draw;
   }
   const drawSlips = photoField({ list: slips, box: '#slipThumbs', cam: '#slipCamera', gal: '#slipInput', alt: 'Weight slip' });
-  photoField({ list: woodPhotos, box: '#woodThumbs', cam: '#woodCamera', gal: '#woodInput', alt: 'Wood load' });
+  sidePhotoSlots($('#woodSlots'), woodSlots, { onChange: () => { dirty = true; }, removed: removedFiles });
+  if (woodOther.length) photoField({ list: woodOther, box: '#woodThumbs', cam: '#woodCamera', gal: '#woodInput', alt: 'Wood load' });
 
   // ---- Voice note ----
   const recorder = createRecorder();
@@ -1148,13 +1161,17 @@ function renderOrderForm(view, editId) {
     }
     order.woodPhotoIds = [];
     order.woodFeats = {};
-    for (const w of woodPhotos) {
+    order.woodSides = {};
+    const woodAll = [...Object.entries(woodSlots).map(([side, w]) => ({ ...w, side })), ...woodOther];
+    for (const w of woodAll) {
       let id = w.id;
       if (!id) {
+        if (!w.blob) continue;
         id = uid();
         await DB.put('files', { id, blob: w.blob, name: w.name || 'wood-load', orderId: order.id, kind: 'wood', createdAt: now });
       }
       order.woodPhotoIds.push(id);
+      if (w.side) order.woodSides[id] = w.side;
       let feats = w.feats;
       if (!feats && w.blob) { try { feats = await imageFeatures(w.blob); } catch { feats = null; } }
       if (feats) order.woodFeats[id] = feats;

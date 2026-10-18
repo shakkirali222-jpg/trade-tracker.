@@ -28,8 +28,9 @@ It is a single-user web app that installs on the phone ("Add to Home screen"), w
 - Compare all suppliers or all buyers: price trend lines, stacked sales and a ranking table.
 
 **Price check**
-- Take a photo of the logs loaded on the lorry, choose the wood and log size (and weight if you know it). The app suggests a price per ton with a fair range, the load value and your brokerage.
-- It learns from your past orders: wood photos, log size (small / medium / big), weight and the price you agreed. Past loads that look similar, or have the same log size, tell it whether this load should be priced above or below the market.
+- Take 3 photos of the loaded lorry (left side, right side, back with the cut ends), choose the wood, log size (and weight if you know it). The app suggests a price per ton with a fair range, the load value and your brokerage.
+- It learns from your past orders: wood photos, log size (small / medium / big), weight and the price you agreed. Each photo is compared with the same side of past loads; loads that look similar, or have the same log size, tell it whether this load should be priced above or below the market.
+- If similar past loads were mostly one log size, it suggests that size.
 - Shows the 3 most similar past loads with their photos and prices. "Create order at this price" opens a new order already filled in.
 - Orders now have a **Wood photos** section, a **Log size** choice and a **Log length** choice (8 ft single – the normal cut – or 2 × 4 ft pieces) so Price check keeps learning.
 
