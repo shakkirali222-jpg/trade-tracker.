@@ -307,3 +307,4 @@ tr.best td { background: var(--good-bg); }
 .chat-input { display: flex; gap: 8px; }
 .chat-input input { flex: 1; min-width: 0; }
 @media (max-width: 820px) { .chat-log { max-height: 55vh; } }
+.paste-card { margin-top: 14px; }

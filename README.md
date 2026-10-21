@@ -4,7 +4,7 @@ A simple, phone-friendly web app to record supplier prices, search them, and che
 
 ## What it does
 
-- **Add prices** — upload an invoice or quotation (PDF, JPG, PNG, or take a photo). The app reads product names, unit prices, quantities, date, and supplier details (name, phone, email, address, TRN). You check the result, fix anything, and save. **The file itself is never stored**, only the extracted data. You can also type prices by hand.
+- **Add prices** — upload an invoice or quotation (PDF, JPG, PNG, or take a photo), or **paste** a photo or message copied from WhatsApp. The app reads product names, unit prices, quantities, date, and supplier details (name, phone, email, address, TRN). You check the result, fix anything, and save. **The file itself is never stored**, only the extracted data. You can also type prices by hand.
 - **Price history** — the same product bought again (even written slightly differently, e.g. "OPC Cement 50kg" vs "Cement OPC 50 kg bag") is linked automatically and saved with its new date and supplier. Sizes are respected: 12mm and 16mm rebar stay separate.
 - **Search** — by product name or supplier name, with category and supplier filters.
 - **Check a quote** — upload a new quotation and get a clear comparison for each item: cheaper / same / slightly higher / much higher than your best previous price, who offered the best price and when, what the same supplier charged last time, plus the total possible saving and plain-language advice on what to negotiate.

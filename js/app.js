@@ -1,5 +1,5 @@
 import * as db from './store.js';
-import { extractDocument, guessCategory, aiMode } from './extract.js';
+import { extractDocument, extractText, guessCategory, aiMode } from './extract.js';
 import { renderAssistant } from './assistant.js';
 import { priceChart } from './chart.js';
 import { icon } from './icons.js';
@@ -327,8 +327,17 @@ function uploadWidget(container, { title, subtitle, onResult }) {
       <div class="btn-row" style="justify-content:center">
         <button type="button" class="btn btn-primary" id="pickFile">${icon.file} Choose file</button>
         <button type="button" class="btn" id="takePhoto">${icon.camera} Take photo</button>
+        <button type="button" class="btn" id="pasteBtn">${icon.paste} Paste</button>
       </div>
-      <p class="muted small" style="margin:12px 0 0">PDF, JPG or PNG · the file is read and then discarded</p>
+      <p class="muted small" style="margin:12px 0 0">PDF, JPG or PNG · or paste from WhatsApp · files are read, never stored</p>
+    </div>
+    <div class="card paste-card" id="pasteCard">
+      <div class="card-head" style="margin-bottom:8px"><h3>${icon.paste.replace('<svg', '<svg style="width:18px;height:18px;vertical-align:-3px;margin-right:6px"')}Paste from WhatsApp</h3></div>
+      <p class="small muted" style="margin:0 0 10px">In WhatsApp, long-press the photo or message → <b>Copy</b>. Then come back, long-press the box below → <b>Paste</b>.</p>
+      <textarea id="pasteBox" rows="4" placeholder="Long-press here and tap Paste — a copied photo or the message text with prices"></textarea>
+      <div class="btn-row" style="margin-top:10px;justify-content:flex-end">
+        <button type="button" class="btn btn-primary" id="readPaste" disabled>${icon.sparkle} Read pasted text</button>
+      </div>
     </div>
     <input type="file" id="fileIn" accept="application/pdf,image/*" hidden>
     <input type="file" id="camIn" accept="image/*" capture="environment" hidden>
@@ -344,11 +353,77 @@ function uploadWidget(container, { title, subtitle, onResult }) {
   ['dragenter', 'dragover'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('drag'); }));
   ['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('drag'); }));
   dz.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) handle(f); });
+
+  // ---- Paste (copied photo / PDF / message text, e.g. from WhatsApp) ----
+  const pasteBox = $('#pasteBox', container), readPaste = $('#readPaste', container);
+  const pastedFile = cd => [...(cd?.files || [])].find(f => f.type.startsWith('image/') || f.type === 'application/pdf');
+  pasteBox.addEventListener('input', () => { readPaste.disabled = !pasteBox.value.trim(); });
+  pasteBox.addEventListener('paste', e => {
+    const f = pastedFile(e.clipboardData);
+    if (f) { e.preventDefault(); handle(f); }
+    else setTimeout(() => { readPaste.disabled = !pasteBox.value.trim(); }, 0);
+  });
+  readPaste.addEventListener('click', () => handleText(pasteBox.value));
+  // Ctrl+V / Cmd+V anywhere on the page (computer)
+  const onDocPaste = e => {
+    if (!container.isConnected) { document.removeEventListener('paste', onDocPaste); return; }
+    if (e.target === pasteBox || e.target.closest?.('input, textarea, [contenteditable]')) return;
+    const f = pastedFile(e.clipboardData);
+    if (f) { e.preventDefault(); handle(f); return; }
+    const t = e.clipboardData?.getData('text/plain');
+    if (t && t.trim()) { e.preventDefault(); pasteBox.value = t; readPaste.disabled = false; handleText(t); }
+  };
+  document.addEventListener('paste', onDocPaste);
+  $('#pasteBtn', container).addEventListener('click', async e => {
+    e.stopPropagation();
+    try {
+      if (!navigator.clipboard?.read) throw new Error('no clipboard');
+      const items = await navigator.clipboard.read();
+      for (const item of items) {
+        const type = item.types.find(t => t.startsWith('image/') || t === 'application/pdf');
+        if (type) {
+          const blob = await item.getType(type);
+          const ext = type === 'application/pdf' ? 'pdf' : (type.split('/')[1] || 'png');
+          return handle(new File([blob], `pasted.${ext}`, { type }));
+        }
+      }
+      for (const item of items) {
+        if (item.types.includes('text/plain')) {
+          const t = await (await item.getType('text/plain')).text();
+          if (t.trim()) { pasteBox.value = t; readPaste.disabled = false; return handleText(t); }
+        }
+      }
+      toast('The clipboard is empty. Copy a photo or message in WhatsApp first.', true);
+    } catch {
+      // Browser didn't allow direct clipboard access: use the paste box instead
+      $('#pasteCard', container).scrollIntoView({ behavior: 'smooth', block: 'center' });
+      pasteBox.focus();
+      toast('Long-press the box and tap Paste');
+    }
+  });
   fileIn.addEventListener('change', () => fileIn.files[0] && handle(fileIn.files[0]));
   camIn.addEventListener('change', () => camIn.files[0] && handle(camIn.files[0]));
 
+  async function handleText(text) {
+    if (!text.trim()) return;
+    dz.classList.add('hidden'); $('#pasteCard', container).classList.add('hidden');
+    const status = $('#readStatus', container);
+    status.classList.remove('hidden');
+    try {
+      const data = await extractText(text, msg => { $('#statusText', container).textContent = msg; });
+      data.fromFile = 'the pasted text';
+      if (!data.items.length) toast('No prices were found in the text — please add them below.', true);
+      onResult(data);
+    } catch (err) {
+      console.error(err);
+      toast(err.message || 'Could not read the pasted text.', true);
+      status.classList.add('hidden');
+      dz.classList.remove('hidden'); $('#pasteCard', container).classList.remove('hidden');
+    }
+  }
+
   async function handle(file) {
-    dz.classList.add('hidden');
+    dz.classList.add('hidden'); $('#pasteCard', container).classList.add('hidden');
     const status = $('#readStatus', container);
     status.classList.remove('hidden');
     try {
@@ -360,7 +435,7 @@ function uploadWidget(container, { title, subtitle, onResult }) {
       console.error(err);
       toast(err.message || 'Could not read this file.', true);
       status.classList.add('hidden');
-      dz.classList.remove('hidden');
+      dz.classList.remove('hidden'); $('#pasteCard', container).classList.remove('hidden');
     } finally {
       fileIn.value = ''; camIn.value = '';
     }

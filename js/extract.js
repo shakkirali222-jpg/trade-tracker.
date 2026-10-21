@@ -59,6 +59,27 @@ export async function extractDocument(file, onStatus = () => {}) {
   return result;
 }
 
+/** Read prices from copied text (a WhatsApp message, an email, a pasted quotation). */
+export async function extractText(text, onStatus = () => {}) {
+  text = String(text || '').trim();
+  if (!text) throw new Error('Nothing to read — the pasted text is empty.');
+  if (await aiMode() === 'claude') {
+    try {
+      return await extractWithSample(null, false, onStatus, text);
+    } catch (e) {
+      if (!e.fallback) throw e;
+      markSampleBlocked();
+    }
+  }
+  if (getApiKey()) {
+    onStatus('AI is reading the text…');
+    return await extractWithClaude(null, false, onStatus, text);
+  }
+  const result = parseText(text);
+  result.offline = true;
+  return result;
+}
+
 // ---------------- Claude inside claude.ai (no key) ----------------
 
 function jsonInstructions(categories) {
@@ -70,7 +91,7 @@ Reply with ONLY one JSON object in exactly this shape (use null where a value is
 {"document_type":"invoice|quotation|other","supplier":{"name":"","contact_person":null,"phone":null,"email":null,"address":null,"tax_id":null},"document_number":null,"date":"YYYY-MM-DD","currency":"AED","items":[{"product":"","category":"","unit":null,"quantity":null,"unit_price":0,"line_total":null}]}`;
 }
 
-async function extractWithSample(file, isPdf, onStatus) {
+async function extractWithSample(file, isPdf, onStatus, pastedText = '') {
   const sample = await getSample();
   const limits = await sample.limits().catch(() => null);
   const canImages = !!limits?.images;
@@ -78,7 +99,9 @@ async function extractWithSample(file, isPdf, onStatus) {
   let images = [];
   let docText = '';
 
-  if (isPdf) {
+  if (pastedText) {
+    docText = pastedText;
+  } else if (isPdf) {
     onStatus('Opening PDF…');
     const pdf = await openPdf(file);
     docText = await pdfTextFrom(pdf);
@@ -92,11 +115,14 @@ async function extractWithSample(file, isPdf, onStatus) {
     images = [file];
   }
 
-  const what = images.length
-    ? `The attached image${images.length > 1 ? 's are the pages' : ' is'} of a supplier document.`
-    : 'Below is the text of a supplier document.';
+  const what = pastedText
+    ? 'Below is a supplier quotation, invoice or price message the user copied (for example from WhatsApp or an email). It may be informal, with prices written in a sentence or list.'
+    : images.length
+      ? `The attached image${images.length > 1 ? 's are the pages' : ' is'} of a supplier document.`
+      : 'Below is the text of a supplier document.';
+  const label = pastedText ? 'Copied text' : 'Text layer of the document (may be incomplete or out of order)';
   const prompt = `${what}\n\n${jsonInstructions(categories)}` +
-    (docText.trim() ? `\n\nText layer of the document (may be incomplete or out of order):\n"""\n${docText.slice(0, 60000)}\n"""` : '');
+    (docText.trim() ? `\n\n${label}:\n"""\n${docText.slice(0, 60000)}\n"""` : '');
 
   onStatus('Claude is reading your document… (first time: allow Claude when asked)');
   let data;
@@ -173,13 +199,15 @@ const PROMPT = `Extract the purchase details from this supplier invoice or quota
 - Skip non-product lines (subtotals, VAT, delivery notes, bank details) — but include delivery/transport charges only if they are a priced line item.
 - date: the document date in YYYY-MM-DD. Use null for anything not shown.`;
 
-async function extractWithClaude(file, isPdf, onStatus) {
+async function extractWithClaude(file, isPdf, onStatus, pastedText = '') {
   const { default: Anthropic } = await import(SDK_URL);
   const client = new Anthropic({ apiKey: getApiKey(), dangerouslyAllowBrowser: true, maxRetries: 2 });
   const { categories, settings } = getState();
 
   let block;
-  if (isPdf) {
+  if (pastedText) {
+    block = { type: 'text', text: `Supplier quotation, invoice or price message copied by the user (e.g. from WhatsApp; may be informal):\n"""\n${pastedText.slice(0, 60000)}\n"""` };
+  } else if (isPdf) {
     if (file.size > 30 * 1024 * 1024) throw new Error('PDF is too large (max 30 MB).');
     block = { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: await toBase64(file) } };
   } else {
