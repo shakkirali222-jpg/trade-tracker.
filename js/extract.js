@@ -6,6 +6,22 @@
 
 import { getApiKey, getState } from './store.js';
 
+// iPhone/iPad Safari can't loop over a ReadableStream with "for await" yet; the PDF reader needs it.
+if (typeof ReadableStream !== 'undefined' && !ReadableStream.prototype[Symbol.asyncIterator]) {
+  ReadableStream.prototype[Symbol.asyncIterator] = async function* () {
+    const reader = this.getReader();
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        yield value;
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  };
+}
+
 const SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.130.0/+esm';
 const PDFJS_URL = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.4.299/legacy/build/pdf.min.mjs';
 const PDFJS_WORKER = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.4.299/legacy/build/pdf.worker.min.mjs';
@@ -104,7 +120,7 @@ async function extractWithSample(file, isPdf, onStatus, pastedText = '') {
   } else if (isPdf) {
     onStatus('Opening PDF…');
     const pdf = await openPdf(file);
-    docText = await pdfTextFrom(pdf);
+    docText = await pdfTextFrom(pdf).catch(err => { console.warn('PDF text failed', err); return ''; });
     if (canImages) {
       onStatus('Preparing pages…');
       images = await renderPdfPages(pdf, Math.min(limits.images.maxCount || 5, 5)).catch(() => []);
