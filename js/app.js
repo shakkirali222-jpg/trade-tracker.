@@ -55,6 +55,56 @@ function modal(html, onMount) {
   return close;
 }
 
+/** In-app dialog (browser pop-ups can be blocked inside claude.ai). Resolves true/text, or null if cancelled. */
+function askDialog({ title, text = '', input = null, placeholder = '', okText = 'OK', danger = false }) {
+  return new Promise(resolve => {
+    let done = false;
+    const finish = v => { if (!done) { done = true; resolve(v); } };
+    const close = modal(`
+      <h2>${esc(title)}</h2>
+      ${text ? `<p class="small" style="margin:0 0 12px;color:var(--text-2)">${esc(text)}</p>` : ''}
+      <form id="askF" class="stack">
+        ${input !== null ? `<input name="v" value="${esc(input)}" placeholder="${esc(placeholder)}" required autocomplete="off">` : ''}
+        <div class="btn-row" style="justify-content:flex-end"><button type="button" class="btn" data-close>Cancel</button>
+          <button class="btn ${danger ? 'btn-danger' : 'btn-primary'}">${esc(okText)}</button></div>
+      </form>`, (m, closeFn) => {
+      const f = $('#askF', m);
+      f.addEventListener('submit', e => { e.preventDefault(); finish(input !== null ? f.v.value.trim() : true); closeFn(); });
+      m.addEventListener('click', e => { if (e.target === m || e.target.closest('[data-close]')) finish(null); });
+      setTimeout(() => (f.v || f.querySelector('.btn-primary, .btn-danger'))?.focus(), 30);
+    });
+  });
+}
+const confirmDialog = (title, text = '', okText = 'Delete') => askDialog({ title, text, okText, danger: true });
+
+// ----- Categories: dropdown with "+ New category…" -----
+const NEW_CAT = '__new__';
+function categoryOptions(sel) {
+  return S().categories.map(c => `<option ${c === sel ? 'selected' : ''}>${esc(c)}</option>`).join('') +
+    `<option value="${NEW_CAT}">＋ New category…</option>`;
+}
+/** Ask for a new category name, save it, and return it (or null). */
+async function createCategory(suggest = '') {
+  const name = await askDialog({ title: 'New category', text: 'Give the material group a name, e.g. "Gypsum & Ceiling" or "Scaffolding".', input: suggest, placeholder: 'Category name', okText: 'Add category' });
+  if (!name) return null;
+  const existing = S().categories.find(c => c.toLowerCase() === name.toLowerCase());
+  if (existing) return existing;
+  db.addCategory(name);
+  toast(`Category "${name}" added`);
+  return S().categories.find(c => c.toLowerCase() === name.toLowerCase()) || null;
+}
+/** Make a category <select> open the "new category" dialog when its last option is picked. */
+function wireCategorySelect(select, root, onChange = () => {}) {
+  select.dataset.prev = select.value;
+  select.addEventListener('change', async () => {
+    if (select.value !== NEW_CAT) { select.dataset.prev = select.value; onChange(select.value); return; }
+    const name = await createCategory();
+    // Refresh every category dropdown on screen so the new one appears everywhere
+    $$('select[data-catsel]', root).forEach(s => { const v = s === select ? (name || s.dataset.prev) : s.value; s.innerHTML = categoryOptions(v); s.value = v; s.dataset.prev = v; });
+    onChange(select.value);
+  });
+}
+
 function empty(ic, title, text, action = '') {
   return `<div class="empty">${ic}<h3>${esc(title)}</h3><p>${text}</p>${action}</div>`;
 }
@@ -185,7 +235,7 @@ function docForm(container, data, { mode, onSubmit, onCancel }) {
   const sup = data.supplier || {};
   const supplierOptions = st.suppliers.map(s => `<option value="${esc(s.name)}">`).join('');
   const productOptions = st.products.map(p => `<option value="${esc(p.name)}">`).join('');
-  const catOptions = sel => st.categories.map(c => `<option ${c === sel ? 'selected' : ''}>${esc(c)}</option>`).join('');
+  const catOptions = categoryOptions;
 
   container.innerHTML = `
     ${data.offline ? `<div class="notice" style="margin-bottom:14px">${icon.alert}<div>Read with the basic offline reader — <b>please check every line</b> before saving. Add an API key in <a href="#/settings">Settings</a> for accurate AI reading.</div></div>` : ''}
@@ -248,7 +298,7 @@ function docForm(container, data, { mode, onSubmit, onCancel }) {
     return `<tr data-i="${i}">
       <td class="col-product" data-label="Product"><input data-k="product" list="dlProd" value="${esc(it.product)}" placeholder="Product name" required>
         <div class="hint-slot">${matchHint(it)}</div></td>
-      <td class="col-cat" data-label="Category"><select data-k="category">${catOptions(it.category)}</select></td>
+      <td class="col-cat" data-label="Category"><select data-k="category" data-catsel>${catOptions(it.category)}</select></td>
       <td class="col-unit" data-label="Unit"><input data-k="unit" value="${esc(it.unit)}" placeholder="bag"></td>
       <td class="col-num" data-label="Qty"><input data-k="qty" type="number" step="any" min="0" inputmode="decimal" class="num" style="text-align:right" value="${esc(it.qty)}"></td>
       <td class="col-num" data-label="Unit price *"><input data-k="price" type="number" step="any" min="0" inputmode="decimal" class="num" style="text-align:right" value="${esc(it.price)}" required></td>
@@ -256,14 +306,20 @@ function docForm(container, data, { mode, onSubmit, onCancel }) {
     </tr>`;
   }
 
-  function draw() { tbody.innerHTML = items.map(rowHtml).join(''); }
+  function draw() {
+    tbody.innerHTML = items.map(rowHtml).join('');
+    $$('select[data-catsel]', tbody).forEach(sel => {
+      const i = +sel.closest('tr').dataset.i;
+      wireCategorySelect(sel, container, v => { items[i].category = v; });
+    });
+  }
   draw();
 
   tbody.addEventListener('input', e => {
     const tr = e.target.closest('tr'); if (!tr) return;
     const it = items[+tr.dataset.i];
     const k = e.target.dataset.k;
-    if (k) it[k] = e.target.value;
+    if (k && k !== 'category') it[k] = e.target.value;
   });
   tbody.addEventListener('change', e => {
     const tr = e.target.closest('tr'); if (!tr) return;
@@ -274,18 +330,18 @@ function docForm(container, data, { mode, onSubmit, onCancel }) {
       if (m) {
         // Pre-fill from the matched product
         it.category = m.product.category;
-        $('[data-k=category]', tr).value = m.product.category;
+        $('[data-k=category]', tr).value = m.product.category; $('[data-k=category]', tr).dataset.prev = m.product.category;
         if (!it.unit && m.product.unit) { it.unit = m.product.unit; $('[data-k=unit]', tr).value = it.unit; }
       } else if (!it.category || it.category === 'Other') {
         it.category = guessCategory(it.product, st.categories);
-        $('[data-k=category]', tr).value = it.category;
+        $('[data-k=category]', tr).value = it.category; $('[data-k=category]', tr).dataset.prev = it.category;
       }
       $('.hint-slot', tr).innerHTML = matchHint(it);
     }
     if (e.target.hasAttribute('data-match')) {
       it.productId = e.target.value || null;
       const p = it.productId && db.getProduct(it.productId);
-      if (p) { it.category = p.category; $('[data-k=category]', tr).value = p.category; }
+      if (p) { it.category = p.category; $('[data-k=category]', tr).value = p.category; $('[data-k=category]', tr).dataset.prev = p.category; }
     }
   });
   tbody.addEventListener('click', e => {
@@ -598,8 +654,8 @@ function renderProduct(id) {
 
   priceChart($('#chart'), series, v => money(v, cur));
 
-  $$('[data-delp]').forEach(b => b.addEventListener('click', () => {
-    if (!confirm('Delete this price entry?')) return;
+  $$('[data-delp]').forEach(b => b.addEventListener('click', async () => {
+    if (!await confirmDialog('Delete this price entry?')) return;
     db.deletePrice(b.dataset.delp);
     toast('Price deleted');
     db.getProduct(id) ? renderProduct(id) : (location.hash = '#/search');
@@ -609,18 +665,19 @@ function renderProduct(id) {
     <h2>Edit product</h2>
     <form id="pf" class="stack">
       <div class="field"><label>Name</label><input name="name" value="${esc(p.name)}" required></div>
-      <div class="field"><label>Category</label><select name="category">${S().categories.map(c => `<option ${c === p.category ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
+      <div class="field"><label>Category</label><select name="category" data-catsel>${categoryOptions(p.category)}</select></div>
       <div class="field"><label>Unit</label><input name="unit" value="${esc(p.unit)}"></div>
       <div class="btn-row" style="justify-content:space-between"><button type="button" class="btn btn-danger" id="delP">${icon.trash} Delete product</button>
         <span class="btn-row"><button type="button" class="btn" data-close>Cancel</button><button class="btn btn-primary">Save</button></span></div>
     </form>`, (m, close) => {
+    wireCategorySelect($('[name=category]', m), m);
     $('#pf', m).addEventListener('submit', e => {
       e.preventDefault(); const f = new FormData(e.target);
       db.updateProduct(id, { name: f.get('name').trim(), category: f.get('category'), unit: f.get('unit').trim() });
       close(); toast('Product updated'); renderProduct(id);
     });
-    $('#delP', m).addEventListener('click', () => {
-      if (!confirm(`Delete "${p.name}" and all ${s.count} of its prices?`)) return;
+    $('#delP', m).addEventListener('click', async () => {
+      if (!await confirmDialog(`Delete "${p.name}"?`, `This also deletes all ${s.count} of its prices.`)) return;
       db.deleteProduct(id); close(); toast('Product deleted'); location.hash = '#/search';
     });
   }));
@@ -875,8 +932,8 @@ function renderSupplier(id) {
       Object.keys(f).forEach(k => (f[k] = f[k].trim()));
       db.updateSupplier(id, f); close(); toast('Supplier updated'); renderSupplier(id);
     });
-    $('#delS', m).addEventListener('click', () => {
-      if (!confirm(`Delete ${s.name} and all ${pr.length} of their prices?`)) return;
+    $('#delS', m).addEventListener('click', async () => {
+      if (!await confirmDialog(`Delete ${s.name}?`, `This also deletes all ${pr.length} of their prices.`)) return;
       db.deleteSupplier(id); close(); toast('Supplier deleted'); location.hash = '#/suppliers';
     });
   }));
@@ -960,10 +1017,10 @@ function renderSettings() {
   $('#currency').addEventListener('change', e => { db.updateSettings({ currency: e.target.value.toUpperCase().trim() || 'AED' }); toast('Currency saved'); });
   $('#theme').addEventListener('change', e => { db.updateSettings({ theme: e.target.value }); applyTheme(); });
 
-  $('#catList').addEventListener('click', e => {
+  $('#catList').addEventListener('click', async e => {
     const ren = e.target.closest('[data-ren]'), del = e.target.closest('[data-delc]');
-    if (ren) { const n = prompt('Rename category', ren.dataset.ren); if (n) { db.renameCategory(ren.dataset.ren, n); renderSettings(); } }
-    if (del && confirm(`Delete category "${del.dataset.delc}"? Its products move to "Other".`)) { db.deleteCategory(del.dataset.delc); renderSettings(); }
+    if (ren) { const n = await askDialog({ title: 'Rename category', input: ren.dataset.ren, okText: 'Save' }); if (n) { db.renameCategory(ren.dataset.ren, n); renderSettings(); } }
+    if (del && await confirmDialog(`Delete category "${del.dataset.delc}"?`, 'Its products move to "Other".')) { db.deleteCategory(del.dataset.delc); renderSettings(); }
   });
   $('#addCat').addEventListener('submit', e => {
     e.preventDefault();
@@ -974,7 +1031,7 @@ function renderSettings() {
   $('#impJson').addEventListener('click', () => $('#impFile').click());
   $('#impFile').addEventListener('change', async e => {
     const f = e.target.files[0]; if (!f) return;
-    if (!confirm('Restoring replaces all current data with the backup. Continue?')) return;
+    if (!await confirmDialog('Restore this backup?', 'It replaces all current data with the backup.', 'Restore')) { e.target.value = ''; return; }
     try { db.importJSON(await f.text()); toast('Backup restored'); applyTheme(); location.hash = '#/'; }
     catch (err) { toast(err.message, true); }
   });
@@ -987,9 +1044,9 @@ function renderSettings() {
     });
     download(`price-book-${db.today()}.csv`, '﻿' + [head.join(','), ...lines].join('\n'), 'text/csv');
   });
-  $('#wipe').addEventListener('click', () => {
-    if (!confirm('Delete ALL products, suppliers and prices? This cannot be undone.')) return;
-    if (prompt('Type DELETE to confirm') !== 'DELETE') return;
+  $('#wipe').addEventListener('click', async () => {
+    const typed = await askDialog({ title: 'Delete all data?', text: 'All products, suppliers and prices will be deleted. This cannot be undone. Type DELETE to confirm.', input: '', placeholder: 'DELETE', okText: 'Delete everything', danger: true });
+    if (typed !== 'DELETE') { if (typed !== null) toast('Not deleted — you must type DELETE', true); return; }
     db.clearAll(); toast('All data deleted'); location.hash = '#/';
   });
 }
