@@ -1,0 +1,10 @@
+{
+  "name": "Price Book",
+  "short_name": "Price Book",
+  "description": "Track supplier prices and compare quotations.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f5f6f8",
+  "theme_color": "#1f5fbf",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
