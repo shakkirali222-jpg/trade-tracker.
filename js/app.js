@@ -1,5 +1,6 @@
 import * as db from './store.js';
-import { extractDocument, guessCategory } from './extract.js';
+import { extractDocument, guessCategory, aiMode } from './extract.js';
+import { renderAssistant } from './assistant.js';
 import { priceChart } from './chart.js';
 import { icon } from './icons.js';
 import { normalize } from './match.js';
@@ -77,6 +78,7 @@ const routes = {
   suppliers: renderSuppliers,
   supplier: renderSupplier,
   settings: renderSettings,
+  ask: () => renderAssistant(view(), toast),
 };
 
 function router() {
@@ -86,6 +88,19 @@ function router() {
   $$('[data-nav]').forEach(a => a.classList.toggle('active', a.dataset.nav === navKey || (navKey === 'settings' && a.dataset.nav === 'more') || (navKey === 'suppliers' && a.dataset.nav === 'more')));
   window.scrollTo(0, 0);
   fn(arg ? decodeURIComponent(arg) : undefined);
+  fillAiNotices();
+}
+
+async function fillAiNotices() {
+  const slots = $$('.ai-notice');
+  if (!slots.length) return;
+  const m = await aiMode();
+  const html = {
+    claude: `<div class="notice info">${icon.sparkle}<div><b>Claude reads your documents</b> using your Claude account — no API key needed. Photos, scans and PDFs all work. The first time, claude.ai asks you to allow it.</div></div>`,
+    key: '',
+    offline: `<div class="notice info">${icon.info}<div>Using the basic offline reader (works best on clear, computer-made PDFs). For accurate reading of photos and scans, open the app inside claude.ai or add an API key in <a href="#/settings">Settings</a>.</div></div>`,
+  }[m];
+  slots.forEach(el => { if (el.isConnected) el.innerHTML = html; });
 }
 
 // ================= Dashboard =================
@@ -107,6 +122,7 @@ function renderDashboard() {
       <div><h1>Price Book</h1><p>Track supplier prices, search history and check quotes in seconds.</p></div>
       <div class="btn-row">
         <a class="btn" href="#/add">${icon.plus} Add prices</a>
+        <a class="btn" href="#/ask">${icon.sparkle} Ask AI</a>
         <a class="btn btn-primary" href="#/compare">${icon.compare} Check a quote</a>
       </div>
     </div>
@@ -126,7 +142,7 @@ function renderDashboard() {
       <div class="card" style="margin-top:16px">${empty(icon.file, 'Start your price book',
         'Upload an invoice or quotation (PDF or photo) and the app will read the products, prices, date and supplier for you. Or type prices in by hand.',
         `<div class="btn-row" style="justify-content:center;margin-top:12px"><a class="btn btn-primary" href="#/add">${icon.upload} Upload first invoice</a><a class="btn" href="#/add?manual">${icon.edit} Type manually</a></div>`)}
-      ${!db.getApiKey() ? `<div class="notice info" style="margin-top:8px">${icon.info}<div><b>Tip:</b> for best reading of invoices and photos, add your Anthropic API key in <a href="#/settings">Settings</a>. Without it the app uses a basic offline reader.</div></div>` : ''}
+      <div class="ai-notice" style="margin-top:8px"></div>
       </div>` : `
     <div class="grid grid-2" style="margin-top:16px">
       <div class="card">
@@ -317,7 +333,7 @@ function uploadWidget(container, { title, subtitle, onResult }) {
     <input type="file" id="fileIn" accept="application/pdf,image/*" hidden>
     <input type="file" id="camIn" accept="image/*" capture="environment" hidden>
     <div id="readStatus" class="card hidden" style="text-align:center;padding:34px"><div class="spinner"></div><b id="statusText">Reading…</b><p class="muted small" style="margin:6px 0 0">Usually takes 10–30 seconds.</p></div>
-    ${!db.getApiKey() ? `<div class="notice info" style="margin-top:12px">${icon.info}<div>No API key set — using the basic offline reader (works best on clear, computer-made PDFs). Add your Anthropic API key in <a href="#/settings">Settings</a> to read photos and scanned documents accurately.</div></div>` : ''}`;
+    <div class="ai-notice" style="margin-top:12px"></div>`;
 
   const dz = $('#dz', container);
   const fileIn = $('#fileIn', container), camIn = $('#camIn', container);
@@ -800,8 +816,9 @@ function renderSettings() {
 
     <div class="card">
       <div class="card-head"><h2>${icon.sparkle.replace('<svg', '<svg style="width:18px;height:18px;vertical-align:-3px;margin-right:6px"')}AI document reading</h2>
-        <span class="badge ${key ? 'badge-good' : 'badge-warn'}">${key ? 'Connected' : 'Not set'}</span></div>
-      <p class="small muted" style="margin-top:0">Paste an Anthropic API key (from console.anthropic.com) so the app can read invoices, scanned PDFs and phone photos accurately.
+        <span class="badge badge-info" id="aiBadge">Checking…</span></div>
+      <div id="aiModeText" class="small" style="margin-bottom:12px"></div>
+      <p class="small muted" style="margin-top:0">Optional: paste an Anthropic API key (from console.anthropic.com) to use AI outside claude.ai.
         The key is stored only in this browser. Documents are sent to Anthropic only for reading and are not saved by this app.</p>
       <div class="grid grid-2">
         <div class="field"><label>API key</label><input id="apiKey" type="password" placeholder="sk-ant-…" value="${esc(key)}" autocomplete="off"></div>
@@ -846,6 +863,16 @@ function renderSettings() {
       <button class="btn btn-danger" id="wipe">${icon.trash} Delete all data</button>
     </div>`;
 
+  aiMode().then(m => {
+    const badge = $('#aiBadge'), txt = $('#aiModeText');
+    if (!badge) return;
+    const info = {
+      claude: ['badge-good', 'Ready — using your Claude account', 'You are using the app inside claude.ai, so Claude reads your invoices and answers <a href="#/ask">Ask AI</a> questions using your own Claude account. <b>No API key needed.</b> The first time, claude.ai asks you to allow it.'],
+      key: ['badge-good', 'Ready — using your API key', 'Claude reads invoices and answers <a href="#/ask">Ask AI</a> questions using your API key below.'],
+      offline: ['badge-warn', 'Basic reader only', 'Open the app inside claude.ai (no key needed), or add an API key below, for accurate AI reading and the Ask AI assistant.'],
+    }[m];
+    badge.className = 'badge ' + info[0]; badge.textContent = info[1]; txt.innerHTML = info[2];
+  });
   $('#model').value = st.settings.model;
   $('#theme').value = st.settings.theme;
   $('#saveKey').addEventListener('click', () => {

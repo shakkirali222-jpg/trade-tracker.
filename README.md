@@ -10,11 +10,13 @@ A simple, phone-friendly web app to record supplier prices, search them, and che
 - **Check a quote** — upload a new quotation and get a clear comparison for each item: cheaper / same / slightly higher / much higher than your best previous price, who offered the best price and when, what the same supplier charged last time, plus the total possible saving and plain-language advice on what to negotiate.
 - **Material categories** — Cement & Concrete, Steel & Metal, Electrical, Plumbing, Paint, Tiles, and more. Assigned automatically; add or rename your own in Settings.
 - **Product pages** — best current price, lowest/highest/average, a trend chart per supplier, and the full history.
+- **Ask AI** — an assistant that answers questions about your saved prices ("Which supplier is cheapest for cement?", "Show the price history of 12mm rebar"). It looks up your data with built-in tools and never makes up prices.
 - **Suppliers** — contact details and which products each supplier is cheapest for.
 - **Backup** — download/restore a backup file, export to Excel (CSV). Light and dark mode.
 
-## Reading invoices
+## AI (reading invoices and Ask AI)
 
+- **Inside claude.ai** (the published artifact link): Claude works through your own Claude account — no API key needed. claude.ai asks you to allow it the first time.
 - **With an Anthropic API key** (Settings → AI document reading): Claude reads PDFs, scans and phone photos accurately. Get a key at <https://console.anthropic.com>. The key is stored only in your browser.
 - **Without a key**: a basic offline reader handles clear, computer-made PDFs and simple photos. Always check the lines before saving.
 
@@ -36,7 +38,8 @@ index.html            page shell and navigation
 css/styles.css        design (light/dark)
 js/app.js             screens: dashboard, add, search, compare, product, suppliers, settings
 js/store.js           local data storage, suppliers/products/prices
-js/extract.js         invoice reading (Claude API + offline fallback)
+js/extract.js         invoice reading (claude.ai, Claude API, or offline fallback)
+js/assistant.js       Ask AI agent and its read-only price-lookup tools
 js/match.js           fuzzy product-name matching
 js/chart.js           price trend chart
 ```

@@ -1,30 +1,125 @@
 // Reads an invoice / quotation (PDF or image) and returns structured data.
-// 1) With an Anthropic API key: Claude reads the document (best accuracy, works on photos & scans).
-// 2) Without a key: basic offline reading (PDF text layer or on-device OCR) + simple rules.
+// 1) Opened inside claude.ai: Claude reads it through the viewer's own Claude account (no key needed).
+// 2) With an Anthropic API key: Claude reads it through the API.
+// 3) Otherwise: basic offline reading (PDF text layer or on-device OCR) + simple rules.
 // The file itself is only held in memory while reading; it is never saved.
 
 import { getApiKey, getState } from './store.js';
 
 const SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.130.0/+esm';
-const PDFJS_URL = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.4.299/build/pdf.min.mjs';
-const PDFJS_WORKER = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.4.299/build/pdf.worker.min.mjs';
+const PDFJS_URL = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.4.299/legacy/build/pdf.min.mjs';
+const PDFJS_WORKER = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.4.299/legacy/build/pdf.worker.min.mjs';
 const TESSERACT_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js';
+
+// ---------- Which AI is available? ----------
+let samplePromise = null;
+/** The claude.ai "ask Claude" function, or null when the page is not opened inside claude.ai. */
+export function getSample() {
+  if (!samplePromise) {
+    samplePromise = (window.claude && typeof window.claude.use === 'function')
+      ? window.claude.use('sample').catch(() => null)
+      : Promise.resolve(null);
+  }
+  return samplePromise;
+}
+let sampleBlocked = false; // the viewer declined, or Claude is unavailable for this account
+export function markSampleBlocked() { sampleBlocked = true; }
+
+/** 'claude' (built-in, no key), 'key' (own API key), or 'offline'. */
+export async function aiMode() {
+  if (!sampleBlocked && await getSample()) return 'claude';
+  if (getApiKey()) return 'key';
+  return 'offline';
+}
 
 export async function extractDocument(file, onStatus = () => {}) {
   const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
   const isImage = file.type.startsWith('image/');
   if (!isPdf && !isImage) throw new Error('Please upload a PDF or an image (JPG / PNG).');
 
+  const mode = await aiMode();
+  if (mode === 'claude') {
+    try {
+      return await extractWithSample(file, isPdf, onStatus);
+    } catch (e) {
+      if (!e.fallback) throw e;
+      markSampleBlocked();
+      onStatus('Claude is not available here — trying another way…');
+    }
+  }
   if (getApiKey()) {
     onStatus('AI is reading your document…');
     return await extractWithClaude(file, isPdf, onStatus);
   }
   onStatus(isPdf ? 'Reading PDF text…' : 'Reading image text (this can take ~20 seconds)…');
   const text = isPdf ? await pdfText(file) : await imageText(file, onStatus);
-  if (!text.trim()) throw new Error('No readable text found. Add an API key in Settings for AI reading of scanned/photo documents, or type the prices manually.');
+  if (!text.trim()) throw new Error('No readable text found. Open the app in claude.ai or add an API key in Settings for AI reading, or type the prices manually.');
   const result = parseText(text);
   result.offline = true;
   return result;
+}
+
+// ---------------- Claude inside claude.ai (no key) ----------------
+
+function jsonInstructions(categories) {
+  return `${PROMPT}
+
+Allowed categories: ${categories.join(' | ')}
+
+Reply with ONLY one JSON object in exactly this shape (use null where a value is not shown):
+{"document_type":"invoice|quotation|other","supplier":{"name":"","contact_person":null,"phone":null,"email":null,"address":null,"tax_id":null},"document_number":null,"date":"YYYY-MM-DD","currency":"AED","items":[{"product":"","category":"","unit":null,"quantity":null,"unit_price":0,"line_total":null}]}`;
+}
+
+async function extractWithSample(file, isPdf, onStatus) {
+  const sample = await getSample();
+  const limits = await sample.limits().catch(() => null);
+  const canImages = !!limits?.images;
+  const { categories } = getState();
+  let images = [];
+  let docText = '';
+
+  if (isPdf) {
+    onStatus('Opening PDF…');
+    const pdf = await openPdf(file);
+    docText = await pdfTextFrom(pdf);
+    if (canImages) {
+      onStatus('Preparing pages…');
+      images = await renderPdfPages(pdf, Math.min(limits.images.maxCount || 5, 5)).catch(() => []);
+    }
+    if (!docText.trim() && !images.length) throw new Error('This PDF has no readable text. Take a photo of it instead, or type the prices manually.');
+  } else {
+    if (!canImages) { const e = new Error('Photos cannot be read here'); e.fallback = true; throw e; }
+    images = [file];
+  }
+
+  const what = images.length
+    ? `The attached image${images.length > 1 ? 's are the pages' : ' is'} of a supplier document.`
+    : 'Below is the text of a supplier document.';
+  const prompt = `${what}\n\n${jsonInstructions(categories)}` +
+    (docText.trim() ? `\n\nText layer of the document (may be incomplete or out of order):\n"""\n${docText.slice(0, 60000)}\n"""` : '');
+
+  onStatus('Claude is reading your document… (first time: allow Claude when asked)');
+  let data;
+  try {
+    data = await sample.json(prompt, { images: images.length ? images : undefined, modelTier: 'default' });
+  } catch (e) {
+    const code = e?.code;
+    if (['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed', 'images_unavailable'].includes(code)) {
+      const err = new Error('Claude is not allowed on this page'); err.fallback = true; throw err;
+    }
+    const msg = {
+      rate_limited: 'Too many requests, or your Claude usage limit was reached. Please try again later.',
+      session_expired: 'Please sign in to claude.ai again.',
+      image_rejected: 'This image could not be used. Try a clearer JPG or PNG photo.',
+      refused: 'Claude could not read this document. Please type the prices manually.',
+      invalid_json: 'Claude\'s reply could not be understood. Please try again.',
+      prompt_too_large: 'This document is too long. Try uploading fewer pages.',
+      cancelled: 'Reading was cancelled.',
+    }[code] || 'Claude could not read the document right now. Please try again.';
+    throw new Error(msg);
+  }
+  if (!data || typeof data !== 'object' || !Array.isArray(data.items)) throw new Error('Claude\'s reply could not be understood. Please try again.');
+  return fromAiJson(data, categories);
 }
 
 // ---------------- Claude ----------------
@@ -114,6 +209,11 @@ async function extractWithClaude(file, isPdf, onStatus) {
   let data;
   try { data = JSON.parse(text); } catch { throw new Error('The AI reply could not be understood. Please try again.'); }
 
+  return fromAiJson(data, categories);
+}
+
+function fromAiJson(data, categories) {
+  const num = v => (v === '' || v == null || !isFinite(Number(v)) ? null : Number(v));
   return {
     docType: data.document_type === 'quotation' ? 'quotation' : data.document_type === 'invoice' ? 'invoice' : 'other',
     supplier: {
@@ -126,15 +226,16 @@ async function extractWithClaude(file, isPdf, onStatus) {
     },
     docRef: data.document_number || '',
     date: validDate(data.date),
-    currency: (data.currency || '').toUpperCase().slice(0, 3),
-    items: (data.items || []).map(i => {
-      let price = i.unit_price;
-      if ((price == null || price === 0) && i.line_total && i.quantity) price = i.line_total / i.quantity;
+    currency: String(data.currency || '').toUpperCase().slice(0, 3),
+    items: (data.items || []).filter(i => i && i.product).map(i => {
+      let price = num(i.unit_price);
+      const qty = num(i.quantity), total = num(i.line_total);
+      if ((price == null || price === 0) && total && qty) price = total / qty;
       return {
-        product: i.product || '',
-        category: categories.includes(i.category) ? i.category : 'Other',
+        product: String(i.product),
+        category: categories.includes(i.category) ? i.category : guessCategory(String(i.product), categories),
         unit: i.unit || '',
-        qty: i.quantity ?? '',
+        qty: qty ?? '',
         price: price != null ? round(price) : '',
       };
     }),
@@ -188,10 +289,16 @@ async function shrinkImage(file) {
 
 // ---------------- Offline fallback ----------------
 
-async function pdfText(file) {
-  const pdfjs = await import(PDFJS_URL);
-  pdfjs.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
-  const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+let pdfjsPromise = null;
+async function openPdf(file) {
+  pdfjsPromise ??= import(PDFJS_URL).then(m => { m.GlobalWorkerOptions.workerSrc = PDFJS_WORKER; return m; });
+  const pdfjs = await pdfjsPromise.catch(() => { pdfjsPromise = null; throw new Error('Could not load the PDF reader. Check your internet connection.'); });
+  return await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+}
+
+async function pdfText(file) { return pdfTextFrom(await openPdf(file)); }
+
+async function pdfTextFrom(pdf) {
   const lines = [];
   for (let p = 1; p <= Math.min(pdf.numPages, 20); p++) {
     const page = await pdf.getPage(p);
@@ -209,6 +316,23 @@ async function pdfText(file) {
     });
   }
   return lines.join('\n');
+}
+
+/** Render the first pages of a PDF as JPEG images (for scanned PDFs). */
+async function renderPdfPages(pdf, max) {
+  const out = [];
+  for (let p = 1; p <= Math.min(pdf.numPages, max); p++) {
+    const page = await pdf.getPage(p);
+    const base = page.getViewport({ scale: 1 });
+    const viewport = page.getViewport({ scale: Math.min(2.5, 1600 / base.width) });
+    const c = document.createElement('canvas');
+    c.width = Math.round(viewport.width); c.height = Math.round(viewport.height);
+    const ctx = c.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+    await page.render({ canvasContext: ctx, canvas: c, viewport }).promise;
+    out.push(await new Promise(r => c.toBlob(r, 'image/jpeg', 0.85)));
+  }
+  return out.filter(Boolean);
 }
 
 function loadScript(src) {
