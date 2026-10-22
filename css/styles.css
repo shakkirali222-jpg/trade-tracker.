@@ -320,3 +320,45 @@ input[type="date"]::-webkit-date-and-time-value { text-align: left; }
 .sync-busy { background: var(--brand); animation: pulse 1s ease-in-out infinite; }
 .sync-warn { background: var(--warn); }
 @keyframes pulse { 50% { opacity: .35; } }
+
+/* Multi-quote table */
+.mq-table td, .mq-table th { white-space: nowrap; }
+.mq-table td:first-child { white-space: normal; min-width: 160px; }
+.cell-best { background: var(--good-bg); color: var(--good); font-weight: 700; }
+.mq-sum td { background: var(--surface-2); font-size: 13px; }
+.mq-grand td { font-weight: 700; font-size: 15px; }
+
+/* Monthly bars */
+.bars { display: flex; align-items: flex-end; gap: 3px; height: 190px; padding-top: 10px; }
+.bar-col { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; cursor: pointer; }
+.bar { width: 70%; max-width: 34px; background: var(--series-1); border-radius: 4px 4px 0 0; opacity: .55; }
+.bar-col.sel .bar { opacity: 1; }
+.bar-val { font-size: 9px; color: var(--muted); margin-bottom: 3px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bar-lbl { font-size: 11px; color: var(--text-2); margin-top: 4px; }
+.stars { color: var(--warn); letter-spacing: 1px; }
+.more-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.more-tile { display: flex; flex-direction: column; gap: 6px; padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); color: var(--text); }
+.more-tile svg { width: 24px; height: 24px; color: var(--brand); }
+.more-tile b { font-size: 15px; }
+.more-tile span { font-size: 12px; color: var(--muted); }
+
+/* Link tabs (Compare page) */
+.tabs a.tabs-a { color: var(--text-2); font-weight: 600; padding: 8px 14px; border-radius: 7px; display: inline-flex; gap: 8px; align-items: center; }
+.tabs a.tabs-a svg { width: 18px; height: 18px; }
+.tabs a.tabs-a.active { background: var(--surface); color: var(--text); box-shadow: var(--shadow); }
+.alert-card { border-left: 4px solid var(--bad); }
+
+/* Material list lines as cards on phones */
+@media (max-width: 700px) {
+  .ml-table thead { display: none; }
+  .ml-table, .ml-table tbody, .ml-table tr, .ml-table td { display: block; width: 100%; }
+  .ml-table tr { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .ml-table tr:last-child { border-bottom: 0; }
+  .ml-table td { border: 0; padding: 0; text-align: left !important; }
+  .ml-table td.ml-name, .ml-table td.ml-none, .ml-table td[data-label="Other offers"] { grid-column: 1 / -1; }
+  .ml-table td[data-label]::before { content: attr(data-label); display: block; font-size: 11px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .03em; }
+}
+
+.tabs.tabs-2 { display: grid; grid-template-columns: 1fr 1fr; width: 100%; max-width: 460px; }
+.tabs.tabs-2 a.tabs-a { justify-content: center; padding: 8px 6px; font-size: 14px; }
+@media (max-width: 420px) { .bar-lbl { font-size: 9px; } }

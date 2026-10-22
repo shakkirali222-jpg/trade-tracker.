@@ -25,6 +25,8 @@ if (typeof ReadableStream !== 'undefined' && !ReadableStream.prototype[Symbol.as
 const SDK_URL = 'https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk@0.130.0/+esm';
 const PDFJS_URL = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.4.299/legacy/build/pdf.min.mjs';
 const PDFJS_WORKER = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@6.4.299/legacy/build/pdf.worker.min.mjs';
+const num = v => (v === '' || v == null || !isFinite(Number(v)) ? null : Number(v));
+const XLSX_URL = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
 const TESSERACT_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tesseract.min.js';
 
 // ---------- Which AI is available? ----------
@@ -57,10 +59,39 @@ export async function aiMode() {
   return 'offline';
 }
 
+// ---------- File types ----------
+export const ACCEPT = 'application/pdf,image/*,.xlsx,.xls,.csv,.txt,text/plain,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel';
+const isSheetFile = f => /\.(xlsx|xlsm|xls|csv|ods)$/i.test(f.name || '') || /spreadsheet|excel|csv/.test(f.type || '');
+const isTextFile = f => /\.txt$/i.test(f.name || '') || f.type === 'text/plain';
+
+/** Turn an Excel / CSV / text file into plain text (one row per line, cells separated by " | "). */
+export async function fileToText(file) {
+  if (isTextFile(file) && !isSheetFile(file)) return await file.text();
+  if (/\.csv$/i.test(file.name || '') || file.type === 'text/csv') return (await file.text()).replace(/,/g, ' | ');
+  await loadScript(XLSX_URL);
+  const wb = window.XLSX.read(await file.arrayBuffer(), { type: 'array' });
+  const out = [];
+  for (const name of wb.SheetNames.slice(0, 10)) {
+    const rows = window.XLSX.utils.sheet_to_json(wb.Sheets[name], { header: 1, blankrows: false, raw: false });
+    if (!rows.length) continue;
+    if (wb.SheetNames.length > 1) out.push(`### Sheet: ${name}`);
+    for (const r of rows) {
+      const cells = r.map(c => String(c ?? '').trim());
+      if (cells.some(Boolean)) out.push(cells.join(' | '));
+    }
+  }
+  return out.join('\n');
+}
+
 export async function extractDocument(file, onStatus = () => {}) {
   const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
   const isImage = file.type.startsWith('image/');
-  if (!isPdf && !isImage) throw new Error('Please upload a PDF or an image (JPG / PNG).');
+  if (isSheetFile(file) || isTextFile(file)) {
+    onStatus('Opening file…');
+    const text = await fileToText(file);
+    return await extractText(text, onStatus);
+  }
+  if (!isPdf && !isImage) throw new Error('Please upload a PDF, a photo (JPG / PNG), an Excel file or a text file.');
 
   const mode = await aiMode();
   if (mode === 'claude') {
@@ -115,7 +146,7 @@ function jsonInstructions(categories) {
 Allowed categories: ${categories.join(' | ')}
 
 Reply with ONLY one JSON object in exactly this shape (use null where a value is not shown):
-{"document_type":"invoice|quotation|other","supplier":{"name":"","contact_person":null,"phone":null,"email":null,"address":null,"tax_id":null},"document_number":null,"date":"YYYY-MM-DD","currency":"AED","items":[{"product":"","category":"","unit":null,"quantity":null,"unit_price":0,"line_total":null}]}`;
+{"document_type":"invoice|quotation|other","supplier":{"name":"","contact_person":null,"phone":null,"email":null,"address":null,"tax_id":null},"document_number":null,"date":"YYYY-MM-DD","currency":"AED","vat_percent":null,"delivery_charge":null,"payment_terms":null,"delivery_time":null,"items":[{"product":"","category":"","unit":null,"quantity":null,"unit_price":0,"line_total":null}]}`;
 }
 
 async function extractWithSample(file, isPdf, onStatus, pastedText = '') {
@@ -184,7 +215,7 @@ function schema(categories) {
   return {
     type: 'object',
     additionalProperties: false,
-    required: ['document_type', 'supplier', 'document_number', 'date', 'currency', 'items'],
+    required: ['document_type', 'supplier', 'document_number', 'date', 'currency', 'vat_percent', 'delivery_charge', 'payment_terms', 'delivery_time', 'items'],
     properties: {
       document_type: { type: 'string', enum: ['invoice', 'quotation', 'other'] },
       supplier: {
@@ -196,6 +227,10 @@ function schema(categories) {
       document_number: strOrNull,
       date: { ...strOrNull, description: 'Document date as YYYY-MM-DD' },
       currency: { ...strOrNull, description: 'ISO 4217 code, e.g. AED, USD, INR' },
+      vat_percent: { ...numOrNull, description: 'VAT / tax rate in percent, e.g. 5' },
+      delivery_charge: { ...numOrNull, description: 'Delivery / transport charge for the whole document, if separate' },
+      payment_terms: { ...strOrNull, description: 'e.g. "Cash", "30 days credit", "50% advance"' },
+      delivery_time: { ...strOrNull, description: 'e.g. "Immediate", "3-5 days"' },
       items: {
         type: 'array',
         items: {
@@ -224,7 +259,9 @@ const PROMPT = `Extract the purchase details from this supplier invoice or quota
 - unit: unit of measure as written (bag, pcs, ton, m, kg, ltr, box, roll, sqm...).
 - category: pick the closest category from the list.
 - Skip non-product lines (subtotals, VAT, delivery notes, bank details) — but include delivery/transport charges only if they are a priced line item.
-- date: the document date in YYYY-MM-DD. Use null for anything not shown.`;
+- date: the document date in YYYY-MM-DD. Use null for anything not shown.
+- vat_percent: the VAT/tax rate shown (e.g. 5). delivery_charge: a separate delivery/transport charge for the whole order, if any.
+- payment_terms (e.g. "30 days credit", "Cash", "50% advance") and delivery_time (e.g. "Immediate", "2-3 days"), if mentioned.`;
 
 async function extractWithClaude(file, isPdf, onStatus, pastedText = '') {
   const { default: Anthropic } = await import(SDK_URL);
@@ -268,7 +305,6 @@ async function extractWithClaude(file, isPdf, onStatus, pastedText = '') {
 }
 
 function fromAiJson(data, categories) {
-  const num = v => (v === '' || v == null || !isFinite(Number(v)) ? null : Number(v));
   return {
     docType: data.document_type === 'quotation' ? 'quotation' : data.document_type === 'invoice' ? 'invoice' : 'other',
     supplier: {
@@ -280,6 +316,10 @@ function fromAiJson(data, categories) {
       taxId: data.supplier?.tax_id || '',
     },
     docRef: data.document_number || '',
+    vatPct: num(data.vat_percent) ?? '',
+    delivery: num(data.delivery_charge) ?? '',
+    paymentTerms: data.payment_terms || '',
+    deliveryTime: data.delivery_time || '',
     date: validDate(data.date),
     currency: String(data.currency || '').toUpperCase().slice(0, 3),
     items: (data.items || []).filter(i => i && i.product).map(i => {
@@ -485,3 +525,138 @@ function validDate(s) {
 }
 
 const round = n => Math.round(Number(n) * 10000) / 10000;
+
+// ================= Material lists =================
+// A material list / BOQ / requirement list: names + quantities, usually no prices.
+
+const LIST_PROMPT = `This is a material list (a list of building materials or supplies someone needs to buy — it may be a BOQ, a requirement list, a WhatsApp message or a handwritten note).
+Extract every material line.
+- name: the full material name with size/spec/grade/brand as written (e.g. "OPC Cement 50kg", "Steel Rebar 12mm Grade 60", "PVC Pipe 4 inch Class B").
+- qty: the quantity as a number (null if not given). unit: the unit (bag, ton, pcs, m, sqm, ltr, roll…), null if not given.
+- note: anything else on that line worth keeping (brand preference, location, remarks), else null.
+Skip headings, totals, signatures and lines that are not materials.
+title: a short name for the list (e.g. project or site name if shown), else null.`;
+
+const LIST_SHAPE = '{"title":null,"items":[{"name":"","qty":null,"unit":null,"note":null}]}';
+
+const listSchema = () => ({
+  type: 'object', additionalProperties: false, required: ['title', 'items'],
+  properties: {
+    title: { anyOf: [{ type: 'string' }, { type: 'null' }] },
+    items: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['name', 'qty', 'unit', 'note'],
+      properties: { name: { type: 'string' }, qty: { anyOf: [{ type: 'number' }, { type: 'null' }] }, unit: { anyOf: [{ type: 'string' }, { type: 'null' }] }, note: { anyOf: [{ type: 'string' }, { type: 'null' }] } } } },
+  },
+});
+
+function mapList(data) {
+  return {
+    title: data?.title || '',
+    items: (data?.items || []).filter(i => i && i.name).map(i => ({ name: String(i.name).trim(), qty: num(i.qty) ?? '', unit: i.unit || '', note: i.note || '' })),
+  };
+}
+
+/** Read a material list from a file (PDF, photo, Excel, CSV, text) or from pasted text. */
+export async function extractList(fileOrText, onStatus = () => {}) {
+  let file = null, text = '';
+  if (typeof fileOrText === 'string') text = fileOrText.trim();
+  else {
+    file = fileOrText;
+    if (isSheetFile(file) || isTextFile(file)) { onStatus('Opening file…'); text = await fileToText(file); file = null; }
+  }
+  if (!file && !text) throw new Error('The list is empty.');
+  const isPdf = !!file && (file.type === 'application/pdf' || /\.pdf$/i.test(file.name));
+  if (file && !isPdf && !file.type.startsWith('image/')) throw new Error('Please use a PDF, photo, Excel, CSV or text file.');
+
+  // 1) Claude inside claude.ai
+  if (await aiMode() === 'claude') {
+    try {
+      const sample = await getSample();
+      const limits = await sample.limits().catch(() => null);
+      let images = [], docText = text;
+      if (file && isPdf) {
+        onStatus('Opening PDF…');
+        const pdf = await openPdf(file);
+        docText = await pdfTextFrom(pdf).catch(() => '');
+        if (limits?.images) images = await renderPdfPages(pdf, Math.min(limits.images.maxCount || 5, 5)).catch(() => []);
+      } else if (file) {
+        if (!limits?.images) { const e = new Error('no images'); e.fallback = true; e.code = 'images_unavailable'; throw e; }
+        images = [file];
+      }
+      onStatus('Claude is reading your list…');
+      const prompt = `${LIST_PROMPT}\n\nReply with ONLY one JSON object in exactly this shape:\n${LIST_SHAPE}` +
+        (docText.trim() ? `\n\nThe list text:\n"""\n${docText.slice(0, 60000)}\n"""` : '\n\nThe list is in the attached image(s).');
+      let data;
+      try {
+        data = await sample.json(prompt, { images: images.length ? images : undefined, modelTier: 'default' });
+      } catch (e) {
+        if (['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed', 'images_unavailable'].includes(e?.code)) { const err = new Error('blocked'); err.fallback = true; err.code = e.code; throw err; }
+        throw new Error({ rate_limited: 'Too many requests, or your Claude usage limit was reached. Try again later.', refused: 'Claude could not read this list.', invalid_json: 'Claude\'s reply could not be understood. Please try again.' }[e?.code] || 'Claude could not read the list right now. Please try again.');
+      }
+      return mapList(data);
+    } catch (e) {
+      if (!e.fallback) throw e;
+      markSampleBlocked(e.code);
+    }
+  }
+  // 2) Own API key
+  if (getApiKey()) {
+    onStatus('AI is reading your list…');
+    const { default: Anthropic } = await import(SDK_URL);
+    const client = new Anthropic({ apiKey: getApiKey(), dangerouslyAllowBrowser: true, maxRetries: 2 });
+    let block;
+    if (text) block = { type: 'text', text: `The list:\n"""\n${text.slice(0, 60000)}\n"""` };
+    else if (isPdf) block = { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: await toBase64(file) } };
+    else { const { data, mediaType } = await shrinkImage(file); block = { type: 'image', source: { type: 'base64', media_type: mediaType, data } }; }
+    let res;
+    try {
+      res = await client.beta.messages.create({
+        model: getState().settings.model || 'claude-opus-5-5', max_tokens: 16000,
+        betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default',
+        output_config: { effort: 'low', format: { type: 'json_schema', schema: listSchema() } },
+        messages: [{ role: 'user', content: [block, { type: 'text', text: LIST_PROMPT }] }],
+      });
+    } catch (err) { throw new Error(friendlyApiError(err, Anthropic)); }
+    if (res.stop_reason === 'refusal') throw new Error('The AI could not read this list.');
+    return mapList(JSON.parse(res.content.filter(b => b.type === 'text').map(b => b.text).join('')));
+  }
+  // 3) Offline
+  if (file) {
+    onStatus(isPdf ? 'Reading PDF text…' : 'Reading image text…');
+    text = isPdf ? await pdfText(file) : await imageText(file, onStatus);
+  }
+  const out = parseListText(text);
+  out.offline = true;
+  out.offlineReason = aiStatus.reason;
+  return out;
+}
+
+/** Simple rule-based list reader: "OPC Cement 50kg - 100 bags" -> {name, qty: 100, unit: 'bags'} */
+export function parseListText(text) {
+  const items = [];
+  const UNIT = /^(bags?|pcs|nos?|tons?|kgs?|ltrs?|l|rolls?|box(es)?|sqm|m2|mtrs?|m|rm|sets?|drums?|sheets?|lengths?|bundles?|pkts?|cans?|each|ea|units?|pails?|cartons?|ft|sqft|cum|m3)\.?$/i;
+  for (let line of String(text).split(/\r?\n/)) {
+    if (/^###/.test(line) || /:\s*$/.test(line.trim())) continue; // sheet names, headings like "Site list:"
+    // Spreadsheet rows: "1 | OPC Cement 50kg | 150 | bag"
+    if (line.includes(' | ')) {
+      const cells = line.split(' | ').map(c => c.trim()).filter(Boolean);
+      const nameIdx = cells.reduce((bi, c, i) => (/[a-z]{3}/i.test(c) && !UNIT.test(c) && c.length > (cells[bi] || '').length ? i : bi), -1);
+      if (nameIdx < 0) continue;
+      const name = cells[nameIdx];
+      if (/^(s\.?\s?no|sl|item|description|material|particulars|total|sub ?total)\b/i.test(name)) continue;
+      const rest = cells.slice(nameIdx + 1);
+      const qi = rest.findIndex(c => /^\d+(?:[.,]\d+)?$/.test(c.replace(/,/g, '')));
+      const qty = qi >= 0 ? Number(rest[qi].replace(/,/g, '')) : '';
+      const unit = rest.find(c => UNIT.test(c)) || '';
+      items.push({ name, qty, unit: unit.toLowerCase(), note: '' });
+      continue;
+    }
+    line = line.replace(/^\s*(?:\d{1,3}[.)-]|[-*•])\s+/, '').trim();
+    if (!/[a-z]{3}/i.test(line) || /^(sl|s\.?no|item|description|qty|total|sub ?total)\b/i.test(line)) continue;
+    let qty = '', unit = '';
+    const m = line.match(/(?:[-–:x×|]\s*|\s)(\d+(?:[.,]\d+)?)\s*(bags?|pcs|nos|no|tons?|kg|ltrs?|l|rolls?|boxes|box|sqm|m2|mtrs?|m|rm|sets?|drums?|sheets?|lengths?|bundles?|pkts?|cans?|each)?\.?\s*$/i);
+    if (m) { qty = Number(m[1].replace(',', '.')); unit = (m[2] || '').toLowerCase(); line = line.slice(0, m.index).trim(); }
+    line = line.replace(/[\s|:–-]+$/, '').trim();
+    if (line.length >= 3) items.push({ name: line, qty, unit, note: '' });
+  }
+  return { title: '', items };
+}

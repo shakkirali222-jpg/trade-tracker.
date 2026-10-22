@@ -2,6 +2,7 @@
 // Uploaded PDF/JPG files are never stored — only the extracted details.
 
 import { normalize, similarity } from './match.js';
+import { convertPrice, cleanUnit } from './units.js';
 
 const KEY = 'pricebook.v1';
 const KEY_API = 'pricebook.apiKey';
@@ -38,11 +39,15 @@ function guessCurrency() {
 function emptyState() {
   return {
     version: 1,
-    products: [],   // {id, name, category, unit, createdAt}
-    suppliers: [],  // {id, name, phone, email, address, taxId, contact, createdAt}
-    prices: [],     // {id, productId, supplierId, price, currency, unit, qty, date, docType, docRef, notes, createdAt}
+    products: [],   // {id, name, category, unit, pack?:{qty,unit}, createdAt}
+    suppliers: [],  // {id, name, phone, email, address, taxId, contact, rating, notes, paymentTerms, deliveryTime, createdAt}
+    prices: [],     // {id, productId, supplierId, docId, price, currency, unit, qty, date, docType, docRef, notes, createdAt}
+    docs: [],       // {id, supplierId, date, docType, docRef, currency, vatPct, delivery, paymentTerms, deliveryTime, projectId, createdAt}
+    projects: [],   // {id, name, createdAt}
+    lists: [],      // saved material lists {id, name, items:[{name, qty, unit}], createdAt}
+    deleted: {},    // id -> time, so deletions survive syncing between devices
     categories: [...DEFAULT_CATEGORIES],
-    settings: { currency: guessCurrency(), model: 'claude-opus-5-5', theme: 'auto' },
+    settings: { currency: guessCurrency(), model: 'claude-opus-5-5', theme: 'auto', alertPct: 10, vatPct: guessCurrency() === 'AED' ? 5 : 0 },
   };
 }
 
@@ -93,16 +98,24 @@ export function mergeStates(a, b) {
   const byId = (x, y) => { const m = new Map(); (x || []).forEach(r => m.set(r.id, r)); (y || []).forEach(r => m.set(r.id, r)); return [...m.values()]; };
   const cats = [...(a.categories || [])];
   (b.categories || []).forEach(c => { if (!cats.includes(c)) cats.splice(Math.max(0, cats.indexOf('Other')), 0, c); });
+  const deleted = { ...(a.deleted || {}), ...(b.deleted || {}) };
+  const live = arr => arr.filter(r => !deleted[r.id]);
   return normalizeState({
     ...a,
-    products: byId(a.products, b.products),
-    suppliers: byId(a.suppliers, b.suppliers),
-    prices: byId(a.prices, b.prices),
+    products: live(byId(a.products, b.products)),
+    suppliers: live(byId(a.suppliers, b.suppliers)),
+    prices: live(byId(a.prices, b.prices)),
+    docs: live(byId(a.docs, b.docs)),
+    projects: live(byId(a.projects, b.projects)),
+    lists: live(byId(a.lists, b.lists)),
+    deleted,
     categories: cats,
     settings: { ...(a.settings || {}), ...(b.settings || {}) },
     updatedAt: Date.now(),
   });
 }
+
+function tomb(ids) { state.deleted = state.deleted || {}; const t = Date.now(); ids.forEach(id => { state.deleted[id] = t; }); }
 
 export const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 export const getState = () => state;
@@ -169,8 +182,10 @@ export function updateSupplier(id, patch) {
 }
 
 export function deleteSupplier(id) {
+  tomb([id, ...state.prices.filter(p => p.supplierId === id).map(p => p.id), ...state.docs.filter(d => d.supplierId === id).map(d => d.id)]);
   state.suppliers = state.suppliers.filter(s => s.id !== id);
   state.prices = state.prices.filter(p => p.supplierId !== id);
+  state.docs = state.docs.filter(d => d.supplierId !== id);
   cleanupOrphans(); save();
 }
 
@@ -206,11 +221,13 @@ export function updateProduct(id, patch) {
 export function mergeProduct(fromId, intoId) {
   if (fromId === intoId) return;
   state.prices.forEach(r => { if (r.productId === fromId) r.productId = intoId; });
+  tomb([fromId]);
   state.products = state.products.filter(p => p.id !== fromId);
   save();
 }
 
 export function deleteProduct(id) {
+  tomb([id, ...state.prices.filter(r => r.productId === id).map(r => r.id)]);
   state.products = state.products.filter(p => p.id !== id);
   state.prices = state.prices.filter(r => r.productId !== id);
   save();
@@ -225,7 +242,23 @@ export function deleteProduct(id) {
  */
 export function savePriceDocument(header, items) {
   const supplier = upsertSupplier(header.supplier || {});
+  if (header.paymentTerms && !supplier.paymentTerms) supplier.paymentTerms = header.paymentTerms;
+  if (header.deliveryTime && !supplier.deliveryTime) supplier.deliveryTime = header.deliveryTime;
   let added = 0, skipped = 0;
+  const alerts = [];
+  const date0 = header.date || today();
+  // One record per document: VAT, delivery, payment terms, project
+  let doc = state.docs.find(d => d.supplierId === supplier.id && d.date === date0 && (d.docRef || '') === (header.docRef || '') && d.docType === (header.docType || 'manual'));
+  if (!doc) {
+    doc = { id: uid(), supplierId: supplier.id, date: date0, docType: header.docType || 'manual', docRef: header.docRef || '', createdAt: Date.now() };
+    state.docs.push(doc);
+  }
+  Object.assign(doc, {
+    currency: header.currency || state.settings.currency,
+    vatPct: num(header.vatPct), delivery: num(header.delivery),
+    paymentTerms: header.paymentTerms || doc.paymentTerms || '', deliveryTime: header.deliveryTime || doc.deliveryTime || '',
+    projectId: header.projectId || doc.projectId || null,
+  });
   for (const it of items) {
     const price = Number(it.price);
     if (!it.product || !isFinite(price) || price <= 0) { skipped++; continue; }
@@ -234,7 +267,9 @@ export function savePriceDocument(header, items) {
     else if (it.category && product.category === 'Other' && it.category !== 'Other') product.category = it.category;
     if (!product.unit && it.unit) product.unit = it.unit;
 
-    const date = header.date || today();
+    const date = date0;
+    // Price alert: compare with the best current price before adding this one
+    const before = productSummary(product.id, header.currency || state.settings.currency);
     const dup = state.prices.find(r => r.productId === product.id && r.supplierId === supplier.id && r.date === date && Math.abs(r.price - price) < 1e-9);
     if (dup) { skipped++; continue; }
     state.prices.push({
@@ -242,22 +277,41 @@ export function savePriceDocument(header, items) {
       currency: header.currency || state.settings.currency, unit: it.unit || product.unit || '',
       qty: it.qty === '' || it.qty == null ? null : Number(it.qty),
       date, docType: header.docType || 'manual', docRef: header.docRef || '', notes: it.notes || '',
-      createdAt: Date.now(),
+      docId: doc.id, createdAt: Date.now(),
     });
     added++;
+    if (before) {
+      const np = convertPrice(price, it.unit || product.unit, product.unit, product) ?? price;
+      const ref = before.best;
+      const lim = Number(state.settings.alertPct) || 10;
+      if (np > ref.price * (1 + lim / 100)) alerts.push({ product: product.name, productId: product.id, price: np, unit: product.unit, best: ref, change: (np - ref.price) / ref.price });
+    }
   }
+  if (!state.prices.some(r => r.docId === doc.id)) state.docs = state.docs.filter(d => d !== doc);
   save();
-  return { added, skipped, supplier };
+  return { added, skipped, supplier, alerts, doc };
 }
 
 export function deletePrice(id) {
+  tomb([id]);
   state.prices = state.prices.filter(r => r.id !== id);
   cleanupOrphans(); save();
 }
 
 function cleanupOrphans() {
   const used = new Set(state.prices.map(r => r.productId));
+  const gone = state.products.filter(p => !used.has(p.id)).map(p => p.id);
+  if (gone.length) tomb(gone);
   state.products = state.products.filter(p => used.has(p.id));
+}
+
+const num = v => (v === '' || v == null || !isFinite(Number(v)) ? null : Number(v));
+export const getDoc = id => state.docs.find(d => d.id === id);
+
+/** The price of a record expressed per the product's own unit (e.g. per ton), or null when units can't be converted. */
+export function normPrice(r, product = getProduct(r.productId)) {
+  if (!product || !cleanUnit(product.unit) || !cleanUnit(r.unit) || cleanUnit(r.unit) === cleanUnit(product.unit)) return r.price;
+  return convertPrice(r.price, r.unit, product.unit, product);
 }
 
 export const pricesFor = productId =>
@@ -265,9 +319,20 @@ export const pricesFor = productId =>
 
 /** Summary numbers for a product (optionally only one currency). */
 export function productSummary(productId, currency) {
+  const product = getProduct(productId);
   let rows = pricesFor(productId);
   if (currency) rows = rows.filter(r => r.currency === currency);
+  // Compare everything per the product's unit; keep the original price/unit as rawPrice/rawUnit
+  rows = rows.map(r => {
+    const np = normPrice(r, product);
+    return np == null ? { ...r, rawPrice: r.price, rawUnit: r.unit, unconverted: true }
+      : { ...r, rawPrice: r.price, rawUnit: r.unit, price: np, unit: product?.unit || r.unit };
+  });
+  const comparable = rows.filter(r => !r.unconverted);
+  if (comparable.length) rows = [...comparable, ...rows.filter(r => r.unconverted)];
   if (!rows.length) return null;
+  const all = rows;
+  rows = comparable.length ? comparable : rows;
   const latest = rows[0];
   // Latest price from each supplier
   const perSupplier = new Map();
@@ -279,8 +344,36 @@ export function productSummary(productId, currency) {
   const avg = rows.reduce((s, r) => s + r.price, 0) / rows.length;
   const prev = rows.find(r => r.id !== latest.id && r.supplierId === latest.supplierId) || rows[1];
   const change = prev ? (latest.price - prev.price) / prev.price : null;
-  return { rows, latest, best, lowest, highest, avg, latestPerSupplier, count: rows.length, supplierCount: perSupplier.size, change, prev };
+  return { rows: all, latest, best, lowest, highest, avg, latestPerSupplier, count: all.length, supplierCount: perSupplier.size, change, prev, product };
 }
+
+// ---------- Projects / sites ----------
+export const getProject = id => state.projects.find(p => p.id === id);
+export function addProject(name) {
+  name = String(name || '').trim();
+  if (!name) return null;
+  const ex = state.projects.find(p => p.name.toLowerCase() === name.toLowerCase());
+  if (ex) return ex;
+  const p = { id: uid(), name, createdAt: Date.now() };
+  state.projects.push(p); save(); return p;
+}
+export function renameProject(id, name) { const p = getProject(id); if (p && name.trim()) { p.name = name.trim(); save(); } }
+export function deleteProject(id) {
+  tomb([id]);
+  state.projects = state.projects.filter(p => p.id !== id);
+  state.docs.forEach(d => { if (d.projectId === id) d.projectId = null; });
+  save();
+}
+
+// ---------- Saved material lists ----------
+export function saveList(list) {
+  const ex = list.id && state.lists.find(l => l.id === list.id);
+  if (ex) Object.assign(ex, list, { updatedAt: Date.now() });
+  else state.lists.unshift({ ...list, id: list.id || uid(), createdAt: Date.now() });
+  save();
+  return ex || state.lists[0];
+}
+export function deleteList(id) { tomb([id]); state.lists = state.lists.filter(l => l.id !== id); save(); }
 
 // ---------- Backup ----------
 export function exportJSON() { return JSON.stringify(state, null, 2); }

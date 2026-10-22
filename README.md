@@ -10,6 +10,17 @@ A simple, phone-friendly web app to record supplier prices, search them, and che
 - **Check a quote** — upload a new quotation and get a clear comparison for each item: cheaper / same / slightly higher / much higher than your best previous price, who offered the best price and when, what the same supplier charged last time, plus the total possible saving and plain-language advice on what to negotiate.
 - **Material categories** — Cement & Concrete, Steel & Metal, Electrical, Plumbing, Paint, Tiles, and more. Assigned automatically; add or rename your own in Settings.
 - **Product pages** — best current price, lowest/highest/average, a trend chart per supplier, and the full history.
+- **Material list pricing** — upload a material list (Excel, PDF, photo, text) or paste it, and the app fills in the best price and supplier for each line, an estimated total, the cheapest supplier split, and what one supplier alone would cost. Missing prices can go straight into a quote request. Lists can be saved and re-priced later.
+- **Compare several quotes** — 2–6 quotations side by side: cheapest supplier per item, totals with VAT and delivery, payment terms, delivery time, supplier rating, and the best "mix".
+- **Request quotes** — pick materials and suppliers; a ready-made WhatsApp message opens for each supplier.
+- **Share on WhatsApp** — priced lists, comparisons, supplier price lists, reports and projects.
+- **VAT, delivery & payment terms** on every quote and invoice.
+- **Unit conversion** — kg/ton, m/ft, l/ml, pcs/dozen…, plus a pack size per product (1 bag = 50 kg) so prices in different units compare fairly.
+- **Price alerts** — warns when a new price is above your best price by more than your chosen % (default 10%).
+- **Supplier notes & rating**, usual payment terms and delivery time.
+- **Projects / sites** — tag quotes and invoices; see spend per project.
+- **Monthly report** — purchases, top suppliers and categories, price changes, a 12-month chart; share or download.
+- **Team price book** — the owner can switch to one shared book for everyone the page is shared with (Contributor or Editor).
 - **Ask AI** — an assistant that answers questions about your saved prices ("Which supplier is cheapest for cement?", "Show the price history of 12mm rebar"). It looks up your data with built-in tools and never makes up prices.
 - **Suppliers** — contact details and which products each supplier is cheapest for.
 - **Backup** — download/restore a backup file, export to Excel (CSV). Light and dark mode.
@@ -41,6 +52,12 @@ js/store.js           local data storage, suppliers/products/prices
 js/extract.js         invoice reading (claude.ai, Claude API, or offline fallback)
 js/assistant.js       Ask AI agent and its read-only price-lookup tools
 js/match.js           fuzzy product-name matching
-js/sync.js            saving to the Claude account (private, per person)
+js/sync.js            saving to Claude (private per person, or a shared team book)
+js/ui.js              shared helpers: forms, upload/paste widget, dialogs, WhatsApp sharing
+js/units.js           unit conversion
+js/materials.js       material list pricing
+js/multiquote.js      side-by-side quote comparison
+js/request.js         quote requests to suppliers
+js/reports.js         monthly report, projects / sites
 js/chart.js           price trend chart
 ```

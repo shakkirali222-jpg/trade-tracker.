@@ -1,144 +1,16 @@
 import * as db from './store.js';
 import { extractDocument, extractText, guessCategory, aiMode, aiStatus, resetSample } from './extract.js';
 import { renderAssistant } from './assistant.js';
-import { initSync, onSyncChange, sync } from './sync.js';
+import { initSync, onSyncChange, sync, setTeamMode } from './sync.js';
+import { renderMaterials } from './materials.js';
+import { renderRequest } from './request.js';
+import { renderMulti } from './multiquote.js';
+import { renderReports, renderProjects, renderProject } from './reports.js';
+import { convertPrice, cleanUnit } from './units.js';
 import { priceChart } from './chart.js';
 import { icon } from './icons.js';
 import { normalize } from './match.js';
-
-// ================= helpers =================
-const $ = (sel, root = document) => root.querySelector(sel);
-const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
-const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const S = () => db.getState();
-const view = () => $('#view');
-
-function money(v, cur) {
-  if (v == null || v === '' || !isFinite(v)) return '—';
-  const n = Number(v);
-  const digits = Math.abs(n) < 1 && n !== 0 ? 3 : 2;
-  const s = n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: digits });
-  return cur ? `${cur} ${s}` : s;
-}
-function fmtDate(d) {
-  if (!d) return '—';
-  const x = new Date(d + 'T00:00:00');
-  return isNaN(x) ? d : x.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
-}
-function ago(d) {
-  const days = Math.round((Date.now() - new Date(d + 'T00:00:00')) / 864e5);
-  if (days <= 0) return 'today';
-  if (days === 1) return 'yesterday';
-  if (days < 31) return `${days} days ago`;
-  if (days < 365) return `${Math.round(days / 30)} months ago`;
-  return `${(days / 365).toFixed(1)} years ago`;
-}
-const pct = v => `${v > 0 ? '+' : ''}${(v * 100).toFixed(1)}%`;
-const supplierName = id => db.getSupplier(id)?.name || 'Unknown';
-const docLabel = t => ({ invoice: 'Invoice', quotation: 'Quotation', manual: 'Manual entry', other: 'Document' }[t] || 'Document');
-
-function toast(msg, bad = false) {
-  const t = document.createElement('div');
-  t.className = 'toast' + (bad ? ' bad' : '');
-  t.textContent = msg;
-  $('#toasts').appendChild(t);
-  setTimeout(() => t.remove(), bad ? 6000 : 3000);
-}
-
-function modal(html, onMount) {
-  const back = document.createElement('div');
-  back.className = 'modal-back';
-  back.innerHTML = `<div class="modal" role="dialog">${html}</div>`;
-  document.body.appendChild(back);
-  const close = () => back.remove();
-  back.addEventListener('click', e => { if (e.target === back || e.target.closest('[data-close]')) close(); });
-  onMount && onMount(back, close);
-  return close;
-}
-
-/** In-app dialog (browser pop-ups can be blocked inside claude.ai). Resolves true/text, or null if cancelled. */
-function askDialog({ title, text = '', input = null, placeholder = '', okText = 'OK', danger = false }) {
-  return new Promise(resolve => {
-    let done = false;
-    const finish = v => { if (!done) { done = true; resolve(v); } };
-    const close = modal(`
-      <h2>${esc(title)}</h2>
-      ${text ? `<p class="small" style="margin:0 0 12px;color:var(--text-2)">${esc(text)}</p>` : ''}
-      <form id="askF" class="stack">
-        ${input !== null ? `<input name="v" value="${esc(input)}" placeholder="${esc(placeholder)}" required autocomplete="off">` : ''}
-        <div class="btn-row" style="justify-content:flex-end"><button type="button" class="btn" data-close>Cancel</button>
-          <button class="btn ${danger ? 'btn-danger' : 'btn-primary'}">${esc(okText)}</button></div>
-      </form>`, (m, closeFn) => {
-      const f = $('#askF', m);
-      f.addEventListener('submit', e => { e.preventDefault(); finish(input !== null ? f.v.value.trim() : true); closeFn(); });
-      m.addEventListener('click', e => { if (e.target === m || e.target.closest('[data-close]')) finish(null); });
-      setTimeout(() => (f.v || f.querySelector('.btn-primary, .btn-danger'))?.focus(), 30);
-    });
-  });
-}
-const confirmDialog = (title, text = '', okText = 'Delete') => askDialog({ title, text, okText, danger: true });
-
-// ----- Categories: dropdown with "+ New category…" -----
-const NEW_CAT = '__new__';
-function categoryOptions(sel) {
-  return S().categories.map(c => `<option ${c === sel ? 'selected' : ''}>${esc(c)}</option>`).join('') +
-    `<option value="${NEW_CAT}">＋ New category…</option>`;
-}
-/** Ask for a new category name, save it, and return it (or null). */
-async function createCategory(suggest = '') {
-  const name = await askDialog({ title: 'New category', text: 'Give the material group a name, e.g. "Gypsum & Ceiling" or "Scaffolding".', input: suggest, placeholder: 'Category name', okText: 'Add category' });
-  if (!name) return null;
-  const existing = S().categories.find(c => c.toLowerCase() === name.toLowerCase());
-  if (existing) return existing;
-  db.addCategory(name);
-  toast(`Category "${name}" added`);
-  return S().categories.find(c => c.toLowerCase() === name.toLowerCase()) || null;
-}
-/** Make a category <select> open the "new category" dialog when its last option is picked. */
-function wireCategorySelect(select, root, onChange = () => {}) {
-  select.dataset.prev = select.value;
-  select.addEventListener('change', async () => {
-    if (select.value !== NEW_CAT) { select.dataset.prev = select.value; onChange(select.value); return; }
-    const name = await createCategory();
-    // Refresh every category dropdown on screen so the new one appears everywhere
-    $$('select[data-catsel]', root).forEach(s => { const v = s === select ? (name || s.dataset.prev) : s.value; s.innerHTML = categoryOptions(v); s.value = v; s.dataset.prev = v; });
-    onChange(select.value);
-  });
-}
-
-/** Plain explanation of why Claude isn't reading documents, and how to fix it. */
-function whyNoAi(reason) {
-  if (reason === 'not_granted') return `Claude was <b>not allowed</b> for this page. <button type="button" class="btn btn-sm" data-allow-claude>Allow Claude</button> then try again. (Or open the page menu → Permissions.)`;
-  if (reason === 'outside') return `Claude reading only works when Price Book is opened <b>inside the Claude app or claude.ai</b> — this page was opened outside it (for example in Safari directly). Open the Price Book link from your Claude app, or add an API key in <a href="#/settings">Settings</a>.`;
-  if (reason === 'unavailable') return `Claude is not available for this account right now. Try again later, or add an API key in <a href="#/settings">Settings</a>.`;
-  return `For accurate AI reading, open Price Book inside the Claude app or claude.ai, or add an API key in <a href="#/settings">Settings</a>.`;
-}
-
-document.addEventListener('click', async e => {
-  if (!e.target.closest('[data-allow-claude]')) return;
-  try {
-    const perms = await window.claude?.use?.('permissions');
-    if (!perms) throw new Error('none');
-    await perms.manage();
-    resetSample();
-    toast('Thanks — try reading the document again');
-    router();
-  } catch {
-    toast('Open the page menu (top right) → Permissions, and allow Claude.', true);
-  }
-});
-
-function empty(ic, title, text, action = '') {
-  return `<div class="empty">${ic}<h3>${esc(title)}</h3><p>${text}</p>${action}</div>`;
-}
-
-function download(name, text, type) {
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([text], { type }));
-  a.download = name;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
-}
+import { $, $$, esc, S, view, money, fmtDate, ago, pct, supplierName, docLabel, toast, modal, askDialog, confirmDialog, NEW_CAT, shareSheet, categoryOptions, createCategory, wireCategorySelect, whyNoAi, empty, download, docForm, uploadWidget } from './ui.js';
 
 // ================= router =================
 const routes = {
@@ -152,13 +24,20 @@ const routes = {
   supplier: renderSupplier,
   settings: renderSettings,
   ask: () => renderAssistant(view(), toast),
+  materials: renderMaterials,
+  request: renderRequest,
+  reports: renderReports,
+  projects: renderProjects,
+  project: renderProject,
+  more: renderMore,
 };
 
 function router() {
   const [name, arg] = location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
   const fn = routes[name] || renderDashboard;
-  const navKey = name === 'product' ? 'search' : name === 'supplier' ? 'suppliers' : (name || 'dashboard');
-  $$('[data-nav]').forEach(a => a.classList.toggle('active', a.dataset.nav === navKey || (navKey === 'settings' && a.dataset.nav === 'more') || (navKey === 'suppliers' && a.dataset.nav === 'more')));
+  const navKey = { product: 'search', supplier: 'suppliers', project: 'projects' }[name] || name || 'dashboard';
+  const inMore = ['settings', 'suppliers', 'ask', 'request', 'reports', 'projects', 'more'].includes(navKey);
+  $$('[data-nav]').forEach(a => a.classList.toggle('active', a.dataset.nav === navKey || (inMore && a.dataset.nav === 'more')));
   window.scrollTo(0, 0);
   fn(arg ? decodeURIComponent(arg) : undefined);
   fillAiNotices();
@@ -189,6 +68,11 @@ function renderDashboard() {
     .filter(o => o.s && o.s.change != null && Math.abs(o.s.change) >= 0.03)
     .sort((a, b) => Math.abs(b.s.change) - Math.abs(a.s.change)).slice(0, 6);
 
+  const lim = Number(st.settings.alertPct) || 10;
+  const monthAgo = new Date(Date.now() - 45 * 864e5).toISOString().slice(0, 10);
+  const alerts = st.products.map(p => ({ p, s: db.productSummary(p.id) }))
+    .filter(o => o.s && o.s.change != null && o.s.change * 100 >= lim && o.s.latest.date >= monthAgo)
+    .sort((a, b) => b.s.change - a.s.change).slice(0, 5);
   const catCounts = st.categories.map(c => ({ c, n: st.products.filter(p => p.category === c).length })).filter(o => o.n).sort((a, b) => b.n - a.n);
 
   view().innerHTML = `
@@ -196,6 +80,7 @@ function renderDashboard() {
       <div><h1>Price Book</h1><p>Track supplier prices, search history and check quotes in seconds.</p><div data-sync class="sync-line"></div></div>
       <div class="btn-row">
         <a class="btn" href="#/add">${icon.plus} Add prices</a>
+        <a class="btn" href="#/materials">${icon.list} Price a list</a>
         <a class="btn" href="#/ask">${icon.sparkle} Ask AI</a>
         <a class="btn btn-primary" href="#/compare">${icon.compare} Check a quote</a>
       </div>
@@ -218,6 +103,11 @@ function renderDashboard() {
         `<div class="btn-row" style="justify-content:center;margin-top:12px"><a class="btn btn-primary" href="#/add">${icon.upload} Upload first invoice</a><a class="btn" href="#/add?manual">${icon.edit} Type manually</a></div>`)}
       <div class="ai-notice" style="margin-top:8px"></div>
       </div>` : `
+    ${alerts.length ? `<div class="card alert-card" style="margin-top:16px">
+      <div class="card-head"><h2>${icon.bell.replace('<svg', '<svg style="width:18px;height:18px;vertical-align:-3px;margin-right:6px"')}Price alerts</h2><span class="small muted">up ${lim}% or more</span></div>
+      <ul class="list-plain">${alerts.map(({ p, s }) => `<li><div style="min-width:0"><a href="#/product/${p.id}"><b>${esc(p.name)}</b></a>
+        <div class="small muted">${esc(supplierName(s.latest.supplierId))}: ${money(s.prev.price, s.prev.currency)} → ${money(s.latest.price, s.latest.currency)} · ${fmtDate(s.latest.date)}</div></div>
+        <span class="trend-up num">▲ ${pct(s.change)}</span></li>`).join('')}</ul></div>` : ''}
     <div class="grid grid-2" style="margin-top:16px">
       <div class="card">
         <div class="card-head"><h2>Recently added</h2><a class="small" href="#/search">View all</a></div>
@@ -240,286 +130,15 @@ function renderDashboard() {
       </div>
     </div>
     <div class="card" style="margin-top:16px">
+      <div class="card-head"><h2>Tools</h2></div>
+      <div class="more-grid" style="grid-template-columns:repeat(auto-fill,minmax(150px,1fr))">${toolTiles()}</div>
+    </div>
+    <div class="card" style="margin-top:16px">
       <div class="card-head"><h2>Categories</h2><a class="small" href="#/settings">Manage</a></div>
       <div class="chips">${catCounts.map(o => `<a class="chip chip-filter" href="#/search?cat=${encodeURIComponent(o.c)}">${esc(o.c)} <span class="muted">${o.n}</span></a>`).join('') || '<span class="muted small">No products yet</span>'}</div>
     </div>`}
   `;
   $('#dashSearch').addEventListener('keydown', e => { if (e.key === 'Enter') location.hash = '#/search?q=' + encodeURIComponent(e.target.value); });
-}
-
-// ================= Document form (used by Add + Compare) =================
-/**
- * Editable form for one invoice/quotation.
- * mode: 'save' | 'compare'
- */
-function docForm(container, data, { mode, onSubmit, onCancel }) {
-  const st = S();
-  const items = (data.items && data.items.length ? data.items : [{ product: '', category: 'Other', unit: '', qty: '', price: '' }])
-    .map(it => ({ ...it, productId: it.productId !== undefined ? it.productId : (db.bestMatch(it.product)?.product.id || null) }));
-  const sup = data.supplier || {};
-  const supplierOptions = st.suppliers.map(s => `<option value="${esc(s.name)}">`).join('');
-  const productOptions = st.products.map(p => `<option value="${esc(p.name)}">`).join('');
-  const catOptions = categoryOptions;
-
-  container.innerHTML = `
-    ${data.offline ? `<div class="notice" style="margin-bottom:14px">${icon.alert}<div>Read with the basic offline reader — <b>please check every line</b> before saving.<div class="small" style="margin-top:6px">${whyNoAi(data.offlineReason)}</div></div></div>` : ''}
-    ${data.fromFile ? `<div class="notice info" style="margin-bottom:14px">${icon.check}<div>Found <b>${items.length}</b> item${items.length === 1 ? '' : 's'} in <b>${esc(data.fromFile)}</b>. Check the details below, fix anything wrong, then ${mode === 'save' ? 'save' : 'compare'}. The file itself is not stored.</div></div>` : ''}
-    <form id="docForm" autocomplete="off">
-      <div class="card">
-        <div class="card-head"><h2>Supplier & document</h2></div>
-        <div class="grid grid-3">
-          <div class="field"><label>Supplier name *</label><input name="supName" list="dlSup" required value="${esc(sup.name)}" placeholder="e.g. Al Noor Building Materials"></div>
-          <div class="field"><label>Document type</label><select name="docType">
-            ${['quotation', 'invoice', 'manual', 'other'].map(t => `<option value="${t}" ${t === (data.docType || (mode === 'compare' ? 'quotation' : 'manual')) ? 'selected' : ''}>${docLabel(t)}</option>`).join('')}
-          </select></div>
-          <div class="field"><label>Date *</label><input name="date" type="date" required value="${esc(data.date || db.today())}"></div>
-          <div class="field"><label>Invoice / quote no.</label><input name="docRef" value="${esc(data.docRef)}"></div>
-          <div class="field"><label>Currency</label><input name="currency" maxlength="3" value="${esc(data.currency || st.settings.currency)}" style="text-transform:uppercase"></div>
-          <div class="field"><label>Phone</label><input name="supPhone" value="${esc(sup.phone)}"></div>
-        </div>
-        <details style="margin-top:12px"><summary class="small" style="cursor:pointer;color:var(--brand)">More supplier details</summary>
-          <div class="grid grid-3" style="margin-top:10px">
-            <div class="field"><label>Contact person</label><input name="supContact" value="${esc(sup.contact)}"></div>
-            <div class="field"><label>Email</label><input name="supEmail" type="email" value="${esc(sup.email)}"></div>
-            <div class="field"><label>Tax / TRN no.</label><input name="supTax" value="${esc(sup.taxId)}"></div>
-            <div class="field" style="grid-column:1/-1"><label>Address</label><input name="supAddress" value="${esc(sup.address)}"></div>
-          </div>
-        </details>
-      </div>
-
-      <div class="card">
-        <div class="card-head"><h2>Items</h2><span class="small muted">Prices are per unit, before VAT</span></div>
-        <div class="table-wrap">
-          <table class="items-table">
-            <thead><tr><th>Product</th><th>Category</th><th>Unit</th><th class="r">Qty</th><th class="r">Unit price</th><th></th></tr></thead>
-            <tbody id="itemRows"></tbody>
-          </table>
-        </div>
-        <button type="button" class="btn btn-sm" id="addRow" style="margin-top:10px">${icon.plus} Add line</button>
-      </div>
-
-      <div class="btn-row" style="margin-top:16px;justify-content:flex-end">
-        ${onCancel ? '<button type="button" class="btn" id="cancelForm">Start over</button>' : ''}
-        <button type="submit" class="btn btn-primary">${mode === 'save' ? `${icon.check} Save prices` : `${icon.compare} Compare prices`}</button>
-      </div>
-      <datalist id="dlSup">${supplierOptions}</datalist>
-      <datalist id="dlProd">${productOptions}</datalist>
-    </form>`;
-
-  const tbody = $('#itemRows', container);
-
-  function matchHint(it) {
-    const cands = db.matchProducts(it.product, 5);
-    if (!it.product.trim()) return '';
-    if (!cands.length) return `<div class="match-hint">New product</div>`;
-    return `<select class="match-select" data-match>
-      <option value="">➕ Save as new product</option>
-      ${cands.map(c => `<option value="${c.product.id}" ${c.product.id === it.productId ? 'selected' : ''}>= ${esc(c.product.name)} (${Math.round(c.score * 100)}% match)</option>`).join('')}
-    </select>`;
-  }
-
-  function rowHtml(it, i) {
-    return `<tr data-i="${i}">
-      <td class="col-product" data-label="Product"><input data-k="product" list="dlProd" value="${esc(it.product)}" placeholder="Product name" required>
-        <div class="hint-slot">${matchHint(it)}</div></td>
-      <td class="col-cat" data-label="Category"><select data-k="category" data-catsel>${catOptions(it.category)}</select></td>
-      <td class="col-unit" data-label="Unit"><input data-k="unit" value="${esc(it.unit)}" placeholder="bag"></td>
-      <td class="col-num" data-label="Qty"><input data-k="qty" type="number" step="any" min="0" inputmode="decimal" class="num" style="text-align:right" value="${esc(it.qty)}"></td>
-      <td class="col-num" data-label="Unit price *"><input data-k="price" type="number" step="any" min="0" inputmode="decimal" class="num" style="text-align:right" value="${esc(it.price)}" required></td>
-      <td class="col-del"><button type="button" class="btn btn-ghost btn-sm btn-danger" data-del title="Remove line">${icon.trash}</button></td>
-    </tr>`;
-  }
-
-  function draw() {
-    tbody.innerHTML = items.map(rowHtml).join('');
-    $$('select[data-catsel]', tbody).forEach(sel => {
-      const i = +sel.closest('tr').dataset.i;
-      wireCategorySelect(sel, container, v => { items[i].category = v; });
-    });
-  }
-  draw();
-
-  tbody.addEventListener('input', e => {
-    const tr = e.target.closest('tr'); if (!tr) return;
-    const it = items[+tr.dataset.i];
-    const k = e.target.dataset.k;
-    if (k && k !== 'category') it[k] = e.target.value;
-  });
-  tbody.addEventListener('change', e => {
-    const tr = e.target.closest('tr'); if (!tr) return;
-    const it = items[+tr.dataset.i];
-    if (e.target.dataset.k === 'product') {
-      const m = db.bestMatch(it.product);
-      it.productId = m?.product.id || null;
-      if (m) {
-        // Pre-fill from the matched product
-        it.category = m.product.category;
-        $('[data-k=category]', tr).value = m.product.category; $('[data-k=category]', tr).dataset.prev = m.product.category;
-        if (!it.unit && m.product.unit) { it.unit = m.product.unit; $('[data-k=unit]', tr).value = it.unit; }
-      } else if (!it.category || it.category === 'Other') {
-        it.category = guessCategory(it.product, st.categories);
-        $('[data-k=category]', tr).value = it.category; $('[data-k=category]', tr).dataset.prev = it.category;
-      }
-      $('.hint-slot', tr).innerHTML = matchHint(it);
-    }
-    if (e.target.hasAttribute('data-match')) {
-      it.productId = e.target.value || null;
-      const p = it.productId && db.getProduct(it.productId);
-      if (p) { it.category = p.category; $('[data-k=category]', tr).value = p.category; $('[data-k=category]', tr).dataset.prev = p.category; }
-    }
-  });
-  tbody.addEventListener('click', e => {
-    if (!e.target.closest('[data-del]')) return;
-    const i = +e.target.closest('tr').dataset.i;
-    items.splice(i, 1);
-    if (!items.length) items.push({ product: '', category: 'Other', unit: '', qty: '', price: '', productId: null });
-    draw();
-  });
-  $('#addRow', container).addEventListener('click', () => {
-    items.push({ product: '', category: 'Other', unit: '', qty: '', price: '', productId: null });
-    draw();
-    $$('[data-k=product]', tbody).at(-1).focus();
-  });
-  $('#cancelForm', container)?.addEventListener('click', onCancel);
-
-  $('#docForm', container).addEventListener('submit', e => {
-    e.preventDefault();
-    const f = new FormData(e.target);
-    const header = {
-      supplier: { name: f.get('supName').trim(), phone: f.get('supPhone'), contact: f.get('supContact'), email: f.get('supEmail'), taxId: f.get('supTax'), address: f.get('supAddress') },
-      docType: f.get('docType'), date: f.get('date'), docRef: f.get('docRef').trim(),
-      currency: (f.get('currency') || st.settings.currency).toUpperCase().trim(),
-    };
-    const clean = items.filter(it => it.product.trim() && Number(it.price) > 0)
-      .map(it => ({ ...it, product: it.product.trim(), price: Number(it.price), qty: it.qty === '' ? '' : Number(it.qty) }));
-    if (!clean.length) { toast('Add at least one product with a price.', true); return; }
-    onSubmit(header, clean);
-  });
-}
-
-// ================= Upload widget =================
-function uploadWidget(container, { title, subtitle, onResult }) {
-  container.innerHTML = `
-    <div class="dropzone" id="dz" tabindex="0" role="button">
-      <div class="icon">${icon.upload}</div>
-      <strong>${title}</strong>
-      <p class="muted small" style="margin:6px 0 14px">${subtitle}</p>
-      <div class="btn-row" style="justify-content:center">
-        <button type="button" class="btn btn-primary" id="pickFile">${icon.file} Choose file</button>
-        <button type="button" class="btn" id="takePhoto">${icon.camera} Take photo</button>
-        <button type="button" class="btn" id="pasteBtn">${icon.paste} Paste</button>
-      </div>
-      <p class="muted small" style="margin:12px 0 0">PDF, JPG or PNG · or paste from WhatsApp · files are read, never stored</p>
-    </div>
-    <div class="card paste-card" id="pasteCard">
-      <div class="card-head" style="margin-bottom:8px"><h3>${icon.paste.replace('<svg', '<svg style="width:18px;height:18px;vertical-align:-3px;margin-right:6px"')}Paste from WhatsApp</h3></div>
-      <p class="small muted" style="margin:0 0 10px">In WhatsApp, long-press the photo or message → <b>Copy</b>. Then come back, long-press the box below → <b>Paste</b>.</p>
-      <textarea id="pasteBox" rows="4" placeholder="Long-press here and tap Paste — a copied photo or the message text with prices"></textarea>
-      <div class="btn-row" style="margin-top:10px;justify-content:flex-end">
-        <button type="button" class="btn btn-primary" id="readPaste" disabled>${icon.sparkle} Read pasted text</button>
-      </div>
-    </div>
-    <input type="file" id="fileIn" accept="application/pdf,image/*" hidden>
-    <input type="file" id="camIn" accept="image/*" capture="environment" hidden>
-    <div id="readStatus" class="card hidden" style="text-align:center;padding:34px"><div class="spinner"></div><b id="statusText">Reading…</b><p class="muted small" style="margin:6px 0 0">Usually takes 10–30 seconds.</p></div>
-    <div class="ai-notice" style="margin-top:12px"></div>`;
-
-  const dz = $('#dz', container);
-  const fileIn = $('#fileIn', container), camIn = $('#camIn', container);
-  $('#pickFile', container).addEventListener('click', e => { e.stopPropagation(); fileIn.click(); });
-  $('#takePhoto', container).addEventListener('click', e => { e.stopPropagation(); camIn.click(); });
-  dz.addEventListener('click', () => fileIn.click());
-  dz.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileIn.click(); } });
-  ['dragenter', 'dragover'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add('drag'); }));
-  ['dragleave', 'drop'].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove('drag'); }));
-  dz.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) handle(f); });
-
-  // ---- Paste (copied photo / PDF / message text, e.g. from WhatsApp) ----
-  const pasteBox = $('#pasteBox', container), readPaste = $('#readPaste', container);
-  const pastedFile = cd => [...(cd?.files || [])].find(f => f.type.startsWith('image/') || f.type === 'application/pdf');
-  pasteBox.addEventListener('input', () => { readPaste.disabled = !pasteBox.value.trim(); });
-  pasteBox.addEventListener('paste', e => {
-    const f = pastedFile(e.clipboardData);
-    if (f) { e.preventDefault(); handle(f); }
-    else setTimeout(() => { readPaste.disabled = !pasteBox.value.trim(); }, 0);
-  });
-  readPaste.addEventListener('click', () => handleText(pasteBox.value));
-  // Ctrl+V / Cmd+V anywhere on the page (computer)
-  const onDocPaste = e => {
-    if (!container.isConnected) { document.removeEventListener('paste', onDocPaste); return; }
-    if (e.target === pasteBox || e.target.closest?.('input, textarea, [contenteditable]')) return;
-    const f = pastedFile(e.clipboardData);
-    if (f) { e.preventDefault(); handle(f); return; }
-    const t = e.clipboardData?.getData('text/plain');
-    if (t && t.trim()) { e.preventDefault(); pasteBox.value = t; readPaste.disabled = false; handleText(t); }
-  };
-  document.addEventListener('paste', onDocPaste);
-  $('#pasteBtn', container).addEventListener('click', async e => {
-    e.stopPropagation();
-    try {
-      if (!navigator.clipboard?.read) throw new Error('no clipboard');
-      const items = await navigator.clipboard.read();
-      for (const item of items) {
-        const type = item.types.find(t => t.startsWith('image/') || t === 'application/pdf');
-        if (type) {
-          const blob = await item.getType(type);
-          const ext = type === 'application/pdf' ? 'pdf' : (type.split('/')[1] || 'png');
-          return handle(new File([blob], `pasted.${ext}`, { type }));
-        }
-      }
-      for (const item of items) {
-        if (item.types.includes('text/plain')) {
-          const t = await (await item.getType('text/plain')).text();
-          if (t.trim()) { pasteBox.value = t; readPaste.disabled = false; return handleText(t); }
-        }
-      }
-      toast('The clipboard is empty. Copy a photo or message in WhatsApp first.', true);
-    } catch {
-      // Browser didn't allow direct clipboard access: use the paste box instead
-      $('#pasteCard', container).scrollIntoView({ behavior: 'smooth', block: 'center' });
-      pasteBox.focus();
-      toast('Long-press the box and tap Paste');
-    }
-  });
-  fileIn.addEventListener('change', () => fileIn.files[0] && handle(fileIn.files[0]));
-  camIn.addEventListener('change', () => camIn.files[0] && handle(camIn.files[0]));
-
-  async function handleText(text) {
-    if (!text.trim()) return;
-    dz.classList.add('hidden'); $('#pasteCard', container).classList.add('hidden');
-    const status = $('#readStatus', container);
-    status.classList.remove('hidden');
-    try {
-      const data = await extractText(text, msg => { $('#statusText', container).textContent = msg; });
-      data.fromFile = 'the pasted text';
-      if (!data.items.length) toast('No prices were found in the text — please add them below.', true);
-      onResult(data);
-    } catch (err) {
-      console.error(err);
-      toast(err.message || 'Could not read the pasted text.', true);
-      status.classList.add('hidden');
-      dz.classList.remove('hidden'); $('#pasteCard', container).classList.remove('hidden');
-    }
-  }
-
-  async function handle(file) {
-    dz.classList.add('hidden'); $('#pasteCard', container).classList.add('hidden');
-    const status = $('#readStatus', container);
-    status.classList.remove('hidden');
-    try {
-      const data = await extractDocument(file, msg => { $('#statusText', container).textContent = msg; });
-      data.fromFile = file.name || 'photo';
-      if (!data.items.length) toast('No product lines were found — please add them below.', true);
-      onResult(data);
-    } catch (err) {
-      console.error(err);
-      toast(err.message || 'Could not read this file.', true);
-      status.classList.add('hidden');
-      dz.classList.remove('hidden'); $('#pasteCard', container).classList.remove('hidden');
-    } finally {
-      fileIn.value = ''; camIn.value = '';
-    }
-  }
 }
 
 // ================= Add prices =================
@@ -537,9 +156,10 @@ function renderAdd() {
 
   const body = $('#addBody');
   const save = (header, items) => {
-    const { added, skipped, supplier } = db.savePriceDocument(header, items);
+    const { added, skipped, supplier, alerts } = db.savePriceDocument(header, items);
     toast(`Saved ${added} price${added === 1 ? '' : 's'} from ${supplier.name}${skipped ? ` · ${skipped} duplicate/empty skipped` : ''}`);
     location.hash = '#/supplier/' + supplier.id;
+    showAlerts(alerts);
   };
   const showUpload = () => uploadWidget(body, {
     title: 'Upload invoice or quotation',
@@ -667,8 +287,8 @@ function renderProduct(id) {
         <tbody>${s.rows.map(r => `<tr class="${r.id === s.best.id ? 'best' : ''}">
           <td style="white-space:nowrap">${fmtDate(r.date)}</td>
           <td><a href="#/supplier/${r.supplierId}">${esc(supplierName(r.supplierId))}</a></td>
-          <td class="r num"><b>${money(r.price, r.currency)}</b></td>
-          <td>${esc(r.unit || p.unit)}</td>
+          <td class="r num"><b>${money(r.rawPrice ?? r.price, r.currency)}</b>${r.rawUnit && cleanUnit(r.rawUnit) !== cleanUnit(p.unit) && !r.unconverted ? `<div class="small muted">= ${money(r.price)} / ${esc(p.unit)}</div>` : ''}</td>
+          <td>${esc(r.rawUnit || r.unit || p.unit)}${r.unconverted ? ' <span class="small" style="color:var(--warn)" title="Set the pack size to compare">≠</span>' : ''}</td>
           <td class="r num">${r.qty ?? ''}</td>
           <td class="small">${docLabel(r.docType)}${r.docRef ? ' · ' + esc(r.docRef) : ''}</td>
           <td class="r"><button class="btn btn-ghost btn-sm btn-danger" data-delp="${r.id}" title="Delete this price">${icon.trash}</button></td>
@@ -691,13 +311,19 @@ function renderProduct(id) {
       <div class="field"><label>Name</label><input name="name" value="${esc(p.name)}" required></div>
       <div class="field"><label>Category</label><select name="category" data-catsel>${categoryOptions(p.category)}</select></div>
       <div class="field"><label>Unit</label><input name="unit" value="${esc(p.unit)}"></div>
+      <div class="field"><label>Pack size (optional)</label>
+        <div class="btn-row" style="flex-wrap:nowrap"><span class="small muted" style="white-space:nowrap">1 ${esc(p.unit || 'unit')} =</span>
+        <input name="packQty" type="number" step="any" min="0" inputmode="decimal" value="${esc(p.pack?.qty ?? '')}" placeholder="50" style="width:90px">
+        <input name="packUnit" value="${esc(p.pack?.unit ?? '')}" placeholder="kg" style="width:90px"></div>
+        <span class="small muted">Lets the app compare e.g. a price per bag with a price per kg or ton.</span></div>
       <div class="btn-row" style="justify-content:space-between"><button type="button" class="btn btn-danger" id="delP">${icon.trash} Delete product</button>
         <span class="btn-row"><button type="button" class="btn" data-close>Cancel</button><button class="btn btn-primary">Save</button></span></div>
     </form>`, (m, close) => {
     wireCategorySelect($('[name=category]', m), m);
     $('#pf', m).addEventListener('submit', e => {
       e.preventDefault(); const f = new FormData(e.target);
-      db.updateProduct(id, { name: f.get('name').trim(), category: f.get('category'), unit: f.get('unit').trim() });
+      const pq = Number(f.get('packQty')), pu = f.get('packUnit').trim();
+      db.updateProduct(id, { name: f.get('name').trim(), category: f.get('category'), unit: f.get('unit').trim(), pack: pq > 0 && pu ? { qty: pq, unit: pu } : null });
       close(); toast('Product updated'); renderProduct(id);
     });
     $('#delP', m).addEventListener('click', async () => {
@@ -725,13 +351,19 @@ function renderProduct(id) {
 let compareSession = null; // keeps the current quote while on the page
 
 function renderCompare() {
+  const multi = location.hash.includes('multi');
   view().innerHTML = `
     <div class="page-head">
-      <div><h1>Check a quote</h1><p>Upload a new quotation and instantly see how it compares with prices you've had before.</p></div>
+      <div><h1>${multi ? 'Compare quotes' : 'Check a quote'}</h1><p>${multi ? 'Put 2–6 quotations side by side: cheapest supplier per item and the best total.' : 'Upload a new quotation and instantly see how it compares with prices you\'ve had before.'}</p></div>
       <div class="btn-row" id="cmpTop"></div>
+    </div>
+    <div class="tabs tabs-2" style="margin-bottom:16px">
+      <a class="tabs-a ${multi ? '' : 'active'}" href="#/compare">${icon.compare} One quote</a>
+      <a class="tabs-a ${multi ? 'active' : ''}" href="#/compare?multi">${icon.grid} Several quotes</a>
     </div>
     <div id="cmpBody"></div>`;
   const body = $('#cmpBody');
+  if (multi) return renderMulti(body, $('#cmpTop'));
 
   const start = () => {
     compareSession = null;
@@ -739,7 +371,7 @@ function renderCompare() {
     $('#cmpManual').addEventListener('click', () => { $('#cmpTop').innerHTML = ''; showForm({ docType: 'quotation' }); });
     uploadWidget(body, {
       title: 'Upload the quotation to check',
-      subtitle: 'PDF or photo. Each item is compared against your saved prices from all suppliers.',
+      subtitle: 'PDF, photo, Excel or pasted text. Each item is compared against your saved prices from all suppliers.',
       onResult: data => showForm(data),
     });
   };
@@ -761,12 +393,20 @@ function renderCompare() {
 function analyse(header, it) {
   const cur = header.currency;
   const quoteSup = db.findSupplier(header.supplier.name);
-  const res = { it, product: it.productId ? db.getProduct(it.productId) : null, q: it.price };
+  const product = it.productId ? db.getProduct(it.productId) : null;
+  // Compare per the product's own unit (e.g. a quote per kg vs history per ton)
+  let q = it.price, unitNote = '';
+  if (product && cleanUnit(it.unit) && cleanUnit(product.unit) && cleanUnit(it.unit) !== cleanUnit(product.unit)) {
+    const c = convertPrice(it.price, it.unit, product.unit, product);
+    if (c != null) { q = c; unitNote = `${money(it.price)} per ${it.unit} = ${money(c)} per ${product.unit}`; }
+    else unitNote = `quoted per ${it.unit}, history is per ${product.unit} — set the pack size on the product page to compare`;
+  }
+  const res = { it, product, q, unitNote };
   if (!res.product) return { ...res, status: 'new' };
   let s = db.productSummary(res.product.id, cur);
   if (!s) return { ...res, status: 'new', otherCurrency: !!db.productSummary(res.product.id) };
-  // Ignore this same quote if it was already saved
-  const rows = s.rows.filter(r => !(quoteSup && r.supplierId === quoteSup.id && r.date === header.date && Math.abs(r.price - it.price) < 1e-9));
+  // Ignore this same quote if it was already saved, and prices in units we can't convert
+  const rows = s.rows.filter(r => !r.unconverted && !(quoteSup && r.supplierId === quoteSup.id && r.date === header.date && Math.abs(r.rawPrice - it.price) < 1e-9));
   if (!rows.length) return { ...res, status: 'new' };
   const latestPer = new Map();
   rows.forEach(r => { if (!latestPer.has(r.supplierId)) latestPer.set(r.supplierId, r); });
@@ -774,7 +414,7 @@ function analyse(header, it) {
   const lowest = rows.reduce((a, b) => (b.price < a.price ? b : a));
   const last = rows[0];
   const sameSup = quoteSup ? rows.find(r => r.supplierId === quoteSup.id) : null;
-  const diff = (it.price - best.price) / best.price;
+  const diff = (q - best.price) / best.price;
   const status = diff <= -0.02 ? 'cheaper' : diff < 0.02 ? 'same' : diff <= 0.10 ? 'higher' : 'much-higher';
   return { ...res, status, best, lowest, last, sameSup, diff, quoteSupId: quoteSup?.id, supplierCount: latestPer.size };
 }
@@ -786,8 +426,9 @@ function drawComparison(body, { header, items }, onEdit) {
   results.forEach(r => counts[r.status]++);
   const known = results.filter(r => r.status !== 'new');
   const withQty = known.filter(r => Number(r.it.qty) > 0);
-  const quoteTotal = withQty.reduce((s, r) => s + r.q * r.it.qty, 0);
-  const bestTotal = withQty.reduce((s, r) => s + Math.min(r.q, r.best.price) * r.it.qty, 0);
+  // Totals in the quote's own units (r.q may be converted to the product's unit)
+  const quoteTotal = withQty.reduce((s, r) => s + r.it.price * r.it.qty, 0);
+  const bestTotal = withQty.reduce((s, r) => s + Math.min(r.q, r.best.price) * (r.it.price / r.q) * r.it.qty, 0);
   const saving = quoteTotal - bestTotal;
   const worse = counts.higher + counts['much-higher'];
 
@@ -816,7 +457,8 @@ function drawComparison(body, { header, items }, onEdit) {
   body.innerHTML = `
     <div class="card">
       <div class="card-head" style="margin-bottom:6px">
-        <div><h2>${esc(header.supplier.name)}</h2><div class="small muted">${docLabel(header.docType)}${header.docRef ? ' ' + esc(header.docRef) : ''} · ${fmtDate(header.date)} · ${items.length} items</div></div>
+        <div><h2>${esc(header.supplier.name)}</h2><div class="small muted">${docLabel(header.docType)}${header.docRef ? ' ' + esc(header.docRef) : ''} · ${fmtDate(header.date)} · ${items.length} items${header.paymentTerms ? ' · ' + esc(header.paymentTerms) : ''}${header.deliveryTime ? ' · delivery ' + esc(header.deliveryTime) : ''}</div>
+          ${(() => { const sub = items.reduce((t, i) => t + (Number(i.qty) || 0) * i.price, 0); if (!sub) return ''; const del = Number(header.delivery) || 0, vat = Number(header.vatPct) || 0; return `<div class="small" style="margin-top:4px">Quote total: <b>${money((sub + del) * (1 + vat / 100), cur)}</b> <span class="muted">(${money(sub)}${del ? ' + delivery ' + money(del) : ''}${vat ? ' + VAT ' + vat + '%' : ''})</span></div>`; })()}</div>
         <span class="badge ${verdictCls}" style="font-size:14px;padding:8px 12px">${verdictIcon} ${verdictText}</span>
       </div>
       <div class="grid grid-4" style="margin-top:14px">
@@ -838,7 +480,7 @@ function drawComparison(body, { header, items }, onEdit) {
       <div class="compare-item ${stCls[r.status]}">
         <div class="compare-top">
           <div style="min-width:0"><h3>${esc(r.it.product)}</h3>
-            <div class="small muted">${r.product && normalize(r.product.name) !== normalize(r.it.product) ? `matched to <a href="#/product/${r.product.id}">${esc(r.product.name)}</a> · ` : r.product ? `<a href="#/product/${r.product.id}">view history</a> · ` : ''}${r.it.qty ? `qty ${r.it.qty}${r.it.unit ? ' ' + esc(r.it.unit) : ''}` : esc(r.it.unit || '')}</div></div>
+            <div class="small muted">${r.product && normalize(r.product.name) !== normalize(r.it.product) ? `matched to <a href="#/product/${r.product.id}">${esc(r.product.name)}</a> · ` : r.product ? `<a href="#/product/${r.product.id}">view history</a> · ` : ''}${r.it.qty ? `qty ${r.it.qty}${r.it.unit ? ' ' + esc(r.it.unit) : ''}` : esc(r.it.unit || '')}</div>${r.unitNote ? `<div class="small" style="color:var(--brand)">${esc(r.unitNote)}</div>` : ''}</div>
           ${stBadge(r)}
         </div>
         <div class="compare-grid">
@@ -883,7 +525,7 @@ function renderSuppliers() {
     $('#supList').innerHTML = list.length ? list.map(r => `
       <a class="product-row" href="#/supplier/${r.s.id}">
         <div style="min-width:0"><div class="name">${esc(r.s.name)}</div>
-          <div class="meta">${r.products} products${r.s.phone ? ' · ' + esc(r.s.phone) : ''}${r.s.email ? ' · ' + esc(r.s.email) : ''}</div></div>
+          <div class="meta">${r.s.rating ? `<span class="stars">${'★'.repeat(r.s.rating)}</span>` : ''}${r.products} products${r.s.phone ? ' · ' + esc(r.s.phone) : ''}${r.s.paymentTerms ? ' · ' + esc(r.s.paymentTerms) : ''}</div></div>
         <div class="price"><div class="small muted">Cheapest for</div><div class="big">${r.bestCount}</div><div class="who">${r.last ? 'last ' + ago(r.last) : ''}</div></div>
       </a>`).join('') : `<div class="card">${empty(icon.truck, 'No suppliers yet', 'Suppliers are added automatically when you save an invoice or quotation.')}</div>`;
   };
@@ -911,7 +553,9 @@ function renderSupplier(id) {
     <a href="#/suppliers" class="small" style="display:inline-flex;gap:6px;align-items:center;margin-bottom:10px">${icon.arrowLeft.replace('<svg', '<svg style="width:16px;height:16px"')} All suppliers</a>
     <div class="page-head">
       <div><h1>${esc(s.name)}</h1><p>${items.length} products · cheapest for ${bestCount}</p></div>
-      <div class="btn-row"><button class="btn" id="editS">${icon.edit} Edit details</button></div>
+      <div class="btn-row"><button class="btn" id="editS">${icon.edit} Edit details</button>
+        <button class="btn" id="shareS">${icon.whatsapp} Share price list</button>
+        ${s.phone ? `<a class="btn" href="${'https://wa.me/' + s.phone.replace(/[^\d]/g, '').replace(/^00/, '')}" target="_blank" rel="noopener">${icon.whatsapp} Chat</a>` : ''}</div>
     </div>
     <div class="grid grid-2">
       <div class="card"><h2 style="margin-bottom:10px">Contact</h2>
@@ -921,6 +565,10 @@ function renderSupplier(id) {
           <dt>Email</dt><dd>${s.email ? `<a href="mailto:${esc(s.email)}">${esc(s.email)}</a>` : '—'}</dd>
           <dt>Address</dt><dd>${esc(s.address) || '—'}</dd>
           <dt>Tax / TRN</dt><dd>${esc(s.taxId) || '—'}</dd>
+          <dt>Rating</dt><dd>${s.rating ? `<span class="stars">${'★'.repeat(s.rating)}${'☆'.repeat(5 - s.rating)}</span>` : '—'}</dd>
+          <dt>Payment terms</dt><dd>${esc(s.paymentTerms) || '—'}</dd>
+          <dt>Delivery time</dt><dd>${esc(s.deliveryTime) || '—'}</dd>
+          ${s.notes ? `<dt>Notes</dt><dd>${esc(s.notes)}</dd>` : ''}
         </dl></div>
       <div class="card"><h2 style="margin-bottom:10px">Summary</h2>
         <dl class="kv">
@@ -943,17 +591,21 @@ function renderSupplier(id) {
     </div>`;
 
   $$('[data-go]').forEach(tr => tr.addEventListener('click', () => (location.hash = tr.dataset.go)));
+  $('#shareS').addEventListener('click', () => shareSheet([`*${s.name}* — latest prices`, '', ...items.map(({ r, p }) => `• ${p?.name}: ${money(r.price, r.currency)}${r.unit ? ' / ' + r.unit : ''} (${fmtDate(r.date)})`)].join('\n'), { title: 'Share price list' }));
   $('#editS').addEventListener('click', () => modal(`
     <h2>Edit supplier</h2>
     <form id="sf" class="stack">
-      ${[['name', 'Name'], ['contact', 'Contact person'], ['phone', 'Phone'], ['email', 'Email'], ['address', 'Address'], ['taxId', 'Tax / TRN no.']].map(([k, l]) => `<div class="field"><label>${l}</label><input name="${k}" value="${esc(s[k])}" ${k === 'name' ? 'required' : ''}></div>`).join('')}
+      ${[['name', 'Name'], ['contact', 'Contact person'], ['phone', 'Phone (with country code, e.g. +971…)'], ['email', 'Email'], ['address', 'Address'], ['taxId', 'Tax / TRN no.'], ['paymentTerms', 'Payment terms'], ['deliveryTime', 'Usual delivery time']].map(([k, l]) => `<div class="field"><label>${l}</label><input name="${k}" value="${esc(s[k] || '')}" ${k === 'name' ? 'required' : ''}></div>`).join('')}
+      <div class="field"><label>Rating</label><select name="rating">${[0, 1, 2, 3, 4, 5].map(n => `<option value="${n}" ${(s.rating || 0) === n ? 'selected' : ''}>${n ? '★'.repeat(n) + ' ' + ['', 'Poor', 'Fair', 'Good', 'Very good', 'Excellent'][n] : 'Not rated'}</option>`).join('')}</select></div>
+      <div class="field"><label>Notes</label><textarea name="notes" placeholder="Reliability, quality, contact tips…">${esc(s.notes || '')}</textarea></div>
       <div class="btn-row" style="justify-content:space-between"><button type="button" class="btn btn-danger" id="delS">${icon.trash} Delete</button>
         <span class="btn-row"><button type="button" class="btn" data-close>Cancel</button><button class="btn btn-primary">Save</button></span></div>
     </form>`, (m, close) => {
     $('#sf', m).addEventListener('submit', e => {
       e.preventDefault();
       const f = Object.fromEntries(new FormData(e.target));
-      Object.keys(f).forEach(k => (f[k] = f[k].trim()));
+      Object.keys(f).forEach(k => (f[k] = String(f[k]).trim()));
+      f.rating = Number(f.rating) || 0;
       db.updateSupplier(id, f); close(); toast('Supplier updated'); renderSupplier(id);
     });
     $('#delS', m).addEventListener('click', async () => {
@@ -993,7 +645,19 @@ function renderSettings() {
         <div class="field"><label>Default currency</label><input id="currency" maxlength="3" value="${esc(st.settings.currency)}" style="text-transform:uppercase"></div>
         <div class="field"><label>Appearance</label><select id="theme">
           <option value="auto">Match my device</option><option value="light">Light</option><option value="dark">Dark</option></select></div>
+        <div class="field"><label>Default VAT %</label><input id="vatPct" type="number" step="any" min="0" value="${esc(st.settings.vatPct ?? '')}"></div>
+        <div class="field"><label>Price alert when a price rises by (%)</label><input id="alertPct" type="number" step="any" min="1" value="${esc(st.settings.alertPct ?? 10)}"></div>
       </div>
+    </div>
+
+    <div class="card" id="teamCard">
+      <div class="card-head"><h2>Team price book</h2><span class="badge ${sync.team ? 'badge-good' : 'badge-info'}">${sync.team ? 'Shared with team' : 'Private'}</span></div>
+      ${!sync.available ? '<p class="small muted" style="margin:0">Open Price Book inside the Claude app or claude.ai to use a team price book.</p>'
+        : sync.team ? `<p class="small" style="margin:0 0 10px">Everyone you share this page with (as <b>Contributor</b> or <b>Editor</b>) uses this same price book. Share it from the page's <b>Share</b> button at the top.${sync.canWrite ? '' : ' <b>You can only view it.</b>'}</p>
+            ${sync.isOwner ? '<button class="btn" id="teamOff">Switch back to a private price book</button>' : ''}`
+        : sync.isOwner ? `<p class="small" style="margin:0 0 10px">Let colleagues add and see prices in one shared book. Your current prices are copied into it. Then share this page with them from the <b>Share</b> button at the top (choose Contributor).</p>
+            <button class="btn btn-primary" id="teamOn">Share my price book with my team</button>`
+        : '<p class="small muted" style="margin:0">Only the owner of this page can turn on a team price book.</p>'}
     </div>
 
     <div class="card">
@@ -1041,6 +705,16 @@ function renderSettings() {
   $('#model').addEventListener('change', e => db.updateSettings({ model: e.target.value }));
   $('#currency').addEventListener('change', e => { db.updateSettings({ currency: e.target.value.toUpperCase().trim() || 'AED' }); toast('Currency saved'); });
   $('#theme').addEventListener('change', e => { db.updateSettings({ theme: e.target.value }); applyTheme(); });
+  $('#vatPct').addEventListener('change', e => { db.updateSettings({ vatPct: e.target.value === '' ? '' : Number(e.target.value) }); toast('Default VAT saved'); });
+  $('#alertPct').addEventListener('change', e => { db.updateSettings({ alertPct: Number(e.target.value) || 10 }); toast('Alert level saved'); });
+  $('#teamOn')?.addEventListener('click', async () => {
+    if (!await askDialog({ title: 'Share with your team?', text: 'Your prices are copied into a shared team price book. Everyone you share this page with as Contributor or Editor can see and add prices.', okText: 'Turn on team book' })) return;
+    try { await setTeamMode(true); toast('Team price book is on — now share this page with your team'); renderSettings(); } catch (e) { toast(e.message || 'Could not switch', true); }
+  });
+  $('#teamOff')?.addEventListener('click', async () => {
+    if (!await askDialog({ title: 'Switch back to private?', text: 'You keep a private copy of all current prices. Your team will no longer see new prices you add.', okText: 'Switch to private' })) return;
+    try { await setTeamMode(false); toast('Back to your private price book'); renderSettings(); } catch (e) { toast(e.message || 'Could not switch', true); }
+  });
 
   $('#catList').addEventListener('click', async e => {
     const ren = e.target.closest('[data-ren]'), del = e.target.closest('[data-delc]');
@@ -1076,6 +750,36 @@ function renderSettings() {
   });
 }
 
+// ================= Price alerts, tools, More =================
+function showAlerts(alerts) {
+  if (!alerts || !alerts.length) return;
+  const cur = S().settings.currency;
+  modal(`<h2>${icon.bell.replace('<svg', '<svg style="width:20px;height:20px;vertical-align:-3px;margin-right:6px;color:var(--bad)"')}Price alert</h2>
+    <p class="small" style="margin:0 0 10px">${alerts.length === 1 ? 'This price is' : 'These prices are'} more than ${S().settings.alertPct || 10}% above your best price:</p>
+    <ul class="list-plain">${alerts.map(a => `<li><div><a href="#/product/${a.productId}" data-close><b>${esc(a.product)}</b></a>
+      <div class="small muted">Best: ${money(a.best.price, a.best.currency)} from ${esc(supplierName(a.best.supplierId))} (${fmtDate(a.best.date)})</div></div>
+      <span class="trend-up num">${money(a.price, cur)}<br>▲ ${pct(a.change)}</span></li>`).join('')}</ul>
+    <div class="btn-row" style="justify-content:flex-end;margin-top:12px"><button class="btn btn-primary" data-close>OK</button></div>`);
+}
+
+const TOOLS = [
+  ['#/materials', 'list', 'Price a material list', 'Best price & supplier for every line'],
+  ['#/compare?multi', 'grid', 'Compare quotes', '2–6 quotes side by side'],
+  ['#/request', 'send', 'Request quotes', 'WhatsApp message to suppliers'],
+  ['#/ask', 'sparkle', 'Ask AI', 'Questions about your prices'],
+  ['#/reports', 'chart', 'Monthly report', 'Spend & price changes'],
+  ['#/projects', 'folder', 'Projects / sites', 'Spend per project'],
+  ['#/suppliers', 'truck', 'Suppliers', 'Contacts, ratings, terms'],
+  ['#/settings', 'settings', 'Settings', 'Categories, team, backup'],
+];
+function toolTiles(skip = []) {
+  return TOOLS.filter(t => !skip.includes(t[0])).map(([href, ic, t, d]) => `<a class="more-tile" href="${href}">${icon[ic]}<b>${t}</b><span>${d}</span></a>`).join('');
+}
+function renderMore() {
+  view().innerHTML = `<div class="page-head"><div><h1>More</h1><p>All Price Book tools.</p></div></div>
+    <div class="more-grid">${toolTiles()}</div>`;
+}
+
 // ================= boot =================
 function applyTheme() {
   const t = S().settings.theme;
@@ -1086,8 +790,8 @@ function applyTheme() {
 // ----- Saving to the Claude account -----
 function syncText(st) {
   const t = {
-    saved: ['ok', 'Saved to your Claude account'],
-    saving: ['busy', 'Saving to your Claude account…'],
+    saved: ['ok', st.team ? 'Saved to the team price book' : 'Saved to your Claude account'],
+    saving: ['busy', st.team ? 'Saving to the team price book…' : 'Saving to your Claude account…'],
     loading: ['busy', 'Loading your prices from your Claude account…'],
     error: ['warn', st.detail || 'Could not save to your Claude account'],
     local: ['warn', st.detail || 'Saved on this device only — open Price Book in the Claude app to keep it in your Claude account'],
