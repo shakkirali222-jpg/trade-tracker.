@@ -60,9 +60,48 @@ function load() {
   return emptyState();
 }
 
+// Called after every save — the cloud sync (Claude account) hooks in here.
+let afterSave = null;
+export function setAfterSave(fn) { afterSave = fn; }
+
+function writeLocal() {
+  // The local copy is only a cache; the Claude-account copy is the real one when available.
+  try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { console.warn('Local copy not saved', e); }
+}
+
 export function save() {
-  try { localStorage.setItem(KEY, JSON.stringify(state)); }
-  catch (e) { alert('Could not save — your browser storage may be full. Please export a backup.'); throw e; }
+  state.updatedAt = Date.now();
+  writeLocal();
+  afterSave && afterSave();
+}
+
+export const hasData = s => !!s && ((s.prices && s.prices.length) || (s.products && s.products.length) || (s.suppliers && s.suppliers.length));
+
+function normalizeState(s) {
+  const base = emptyState();
+  return { ...base, ...s, settings: { ...base.settings, ...(s.settings || {}) } };
+}
+
+/** Replace everything with data loaded from the Claude account (does not trigger a cloud save). */
+export function replaceState(s) {
+  state = normalizeState(s);
+  writeLocal();
+}
+
+/** Combine two copies: every product, supplier and price from both (same id: `b` wins). */
+export function mergeStates(a, b) {
+  const byId = (x, y) => { const m = new Map(); (x || []).forEach(r => m.set(r.id, r)); (y || []).forEach(r => m.set(r.id, r)); return [...m.values()]; };
+  const cats = [...(a.categories || [])];
+  (b.categories || []).forEach(c => { if (!cats.includes(c)) cats.splice(Math.max(0, cats.indexOf('Other')), 0, c); });
+  return normalizeState({
+    ...a,
+    products: byId(a.products, b.products),
+    suppliers: byId(a.suppliers, b.suppliers),
+    prices: byId(a.prices, b.prices),
+    categories: cats,
+    settings: { ...(a.settings || {}), ...(b.settings || {}) },
+    updatedAt: Date.now(),
+  });
 }
 
 export const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -248,8 +287,7 @@ export function exportJSON() { return JSON.stringify(state, null, 2); }
 export function importJSON(text) {
   const s = JSON.parse(text);
   if (!s || !Array.isArray(s.prices) || !Array.isArray(s.products)) throw new Error('This is not a Price Book backup file.');
-  const base = emptyState();
-  state = { ...base, ...s, settings: { ...base.settings, ...(s.settings || {}) } };
+  state = normalizeState(s);
   save();
 }
 export function clearAll() { const settings = state.settings; state = emptyState(); state.settings = settings; save(); }

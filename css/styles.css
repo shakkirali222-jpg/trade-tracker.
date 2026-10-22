@@ -312,3 +312,11 @@ tr.best td { background: var(--good-bg); }
 /* iPhone: date inputs ignore width:100% and overflow their box */
 input[type="date"] { -webkit-appearance: none; appearance: none; display: block; min-width: 0; max-width: 100%; text-align: left; }
 input[type="date"]::-webkit-date-and-time-value { text-align: left; }
+
+/* Save status */
+.sync-line { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); margin-top: 6px; }
+.sync-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; background: var(--muted); }
+.sync-ok { background: var(--good); }
+.sync-busy { background: var(--brand); animation: pulse 1s ease-in-out infinite; }
+.sync-warn { background: var(--warn); }
+@keyframes pulse { 50% { opacity: .35; } }

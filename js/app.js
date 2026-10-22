@@ -1,6 +1,7 @@
 import * as db from './store.js';
 import { extractDocument, extractText, guessCategory, aiMode, aiStatus, resetSample } from './extract.js';
 import { renderAssistant } from './assistant.js';
+import { initSync, onSyncChange, sync } from './sync.js';
 import { priceChart } from './chart.js';
 import { icon } from './icons.js';
 import { normalize } from './match.js';
@@ -161,6 +162,7 @@ function router() {
   window.scrollTo(0, 0);
   fn(arg ? decodeURIComponent(arg) : undefined);
   fillAiNotices();
+  if (typeof paintSync === 'function') paintSync();
 }
 
 async function fillAiNotices() {
@@ -191,7 +193,7 @@ function renderDashboard() {
 
   view().innerHTML = `
     <div class="page-head">
-      <div><h1>Price Book</h1><p>Track supplier prices, search history and check quotes in seconds.</p></div>
+      <div><h1>Price Book</h1><p>Track supplier prices, search history and check quotes in seconds.</p><div data-sync class="sync-line"></div></div>
       <div class="btn-row">
         <a class="btn" href="#/add">${icon.plus} Add prices</a>
         <a class="btn" href="#/ask">${icon.sparkle} Ask AI</a>
@@ -1005,8 +1007,9 @@ function renderSettings() {
     </div>
 
     <div class="card">
-      <div class="card-head"><h2>Backup & export</h2></div>
-      <p class="small muted" style="margin-top:0">Your data is saved in this browser only. Download a backup regularly, and use it to move your price book to another phone or computer.</p>
+      <div class="card-head"><h2>Where your data is saved</h2></div>
+      <div data-sync class="sync-line" style="margin-bottom:8px"></div>
+      <p class="small muted" style="margin-top:0">Inside the Claude app or claude.ai, your prices are saved privately to your Claude account, so they stay after you close the app and appear on your other devices. A backup file is still a good idea now and then.</p>
       <div class="btn-row">
         <button class="btn" id="expJson">${icon.download} Download backup</button>
         <button class="btn" id="impJson">${icon.upload} Restore backup</button>
@@ -1080,6 +1083,31 @@ function applyTheme() {
   else delete document.documentElement.dataset.theme;
 }
 
+// ----- Saving to the Claude account -----
+function syncText(st) {
+  const t = {
+    saved: ['ok', 'Saved to your Claude account'],
+    saving: ['busy', 'Saving to your Claude account…'],
+    loading: ['busy', 'Loading your prices from your Claude account…'],
+    error: ['warn', st.detail || 'Could not save to your Claude account'],
+    local: ['warn', st.detail || 'Saved on this device only — open Price Book in the Claude app to keep it in your Claude account'],
+  }[st.status] || ['warn', ''];
+  return `<span class="sync-dot sync-${t[0]}"></span>${esc(t[1])}`;
+}
+function paintSync() { $$('[data-sync]').forEach(el => { el.innerHTML = syncText(sync); }); }
+onSyncChange(paintSync);
+
 applyTheme();
 window.addEventListener('hashchange', router);
 router();
+paintSync();
+
+initSync(reason => {
+  applyTheme();
+  // Don't wipe a half-filled form; otherwise redraw with the loaded data
+  const formOpen = !!$('#docForm') || !!$('.modal-back');
+  if (!formOpen) router();
+  if (reason === 'loaded' || reason === 'merged') toast('Your prices are loaded from your Claude account');
+  if (reason === 'uploaded') toast('Your prices are now saved to your Claude account');
+  if (reason === 'refreshed') toast('Updated with changes from your other device');
+});

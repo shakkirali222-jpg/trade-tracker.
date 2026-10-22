@@ -22,7 +22,7 @@ A simple, phone-friendly web app to record supplier prices, search them, and che
 
 ## Where data is stored
 
-Everything is saved in your browser (localStorage) on the device you use. Use **Settings → Download backup** regularly, and **Restore backup** to move your data to another phone or computer.
+Inside the Claude app or claude.ai, your price book is saved privately to your Claude account (it survives closing the app and appears on all your devices). Elsewhere it is saved in the browser only. **Settings → Download backup** makes a backup file you can restore anywhere.
 
 ## Running it
 
@@ -41,5 +41,6 @@ js/store.js           local data storage, suppliers/products/prices
 js/extract.js         invoice reading (claude.ai, Claude API, or offline fallback)
 js/assistant.js       Ask AI agent and its read-only price-lookup tools
 js/match.js           fuzzy product-name matching
+js/sync.js            saving to the Claude account (private, per person)
 js/chart.js           price trend chart
 ```
