@@ -703,7 +703,7 @@ function renderSettings() {
   });
   $('#clearKey')?.addEventListener('click', () => { db.setApiKey(''); toast('API key removed'); renderSettings(); });
   $('#model').addEventListener('change', e => db.updateSettings({ model: e.target.value }));
-  $('#currency').addEventListener('change', e => { db.updateSettings({ currency: e.target.value.toUpperCase().trim() || 'AED' }); toast('Currency saved'); });
+  $('#currency').addEventListener('change', e => { db.updateSettings({ currency: e.target.value.toUpperCase().trim() || 'AED', currencySet: true }); toast('Currency saved'); });
   $('#theme').addEventListener('change', e => { db.updateSettings({ theme: e.target.value }); applyTheme(); });
   $('#vatPct').addEventListener('change', e => { db.updateSettings({ vatPct: e.target.value === '' ? '' : Number(e.target.value) }); toast('Default VAT saved'); });
   $('#alertPct').addEventListener('change', e => { db.updateSettings({ alertPct: Number(e.target.value) || 10 }); toast('Alert level saved'); });
@@ -788,6 +788,16 @@ function applyTheme() {
 }
 
 // ----- Saving to the Claude account -----
+// If the default currency was only guessed and most saved prices use another one, follow the prices.
+function fixCurrency() {
+  const st = S();
+  if (st.settings.currencySet || !st.prices.length) return;
+  const count = {};
+  st.prices.forEach(r => { if (r.currency) count[r.currency] = (count[r.currency] || 0) + 1; });
+  const top = Object.entries(count).sort((a, b) => b[1] - a[1])[0];
+  if (top && top[0] !== st.settings.currency) db.updateSettings({ currency: top[0] });
+}
+
 function syncText(st) {
   const t = {
     saved: ['ok', st.team ? 'Saved to the team price book' : 'Saved to your Claude account'],
@@ -806,8 +816,10 @@ window.addEventListener('hashchange', router);
 router();
 paintSync();
 
+fixCurrency();
 initSync(reason => {
   applyTheme();
+  fixCurrency();
   // Don't wipe a half-filled form; otherwise redraw with the loaded data
   const formOpen = !!$('#docForm') || !!$('.modal-back');
   if (!formOpen) router();
