@@ -29,17 +29,26 @@ const TESSERACT_URL = 'https://cdn.jsdelivr.net/npm/tesseract.js@7.0.0/dist/tess
 
 // ---------- Which AI is available? ----------
 let samplePromise = null;
+/** Why Claude (no-key) reading is not in use: '' | 'outside' | 'not_granted' | 'unavailable'. */
+export const aiStatus = { reason: '' };
+const outsideViewer = () => { try { return window.top === window; } catch { return false; } };
 /** The claude.ai "ask Claude" function, or null when the page is not opened inside claude.ai. */
 export function getSample() {
   if (!samplePromise) {
     samplePromise = (window.claude && typeof window.claude.use === 'function')
       ? window.claude.use('sample').catch(() => null)
       : Promise.resolve(null);
+    samplePromise.then(s => { if (!s) aiStatus.reason = (!window.claude || outsideViewer()) ? 'outside' : 'unavailable'; });
   }
   return samplePromise;
 }
 let sampleBlocked = false; // the viewer declined, or Claude is unavailable for this account
-export function markSampleBlocked() { sampleBlocked = true; }
+export function markSampleBlocked(code) {
+  sampleBlocked = true;
+  aiStatus.reason = code === 'not_granted' ? 'not_granted' : 'unavailable';
+}
+/** Let the viewer try Claude again (e.g. after allowing it in Permissions). */
+export function resetSample() { sampleBlocked = false; aiStatus.reason = ''; }
 
 /** 'claude' (built-in, no key), 'key' (own API key), or 'offline'. */
 export async function aiMode() {
@@ -59,7 +68,7 @@ export async function extractDocument(file, onStatus = () => {}) {
       return await extractWithSample(file, isPdf, onStatus);
     } catch (e) {
       if (!e.fallback) throw e;
-      markSampleBlocked();
+      markSampleBlocked(e.code);
       onStatus('Claude is not available here — trying another way…');
     }
   }
@@ -72,6 +81,7 @@ export async function extractDocument(file, onStatus = () => {}) {
   if (!text.trim()) throw new Error('No readable text found. Open the app in claude.ai or add an API key in Settings for AI reading, or type the prices manually.');
   const result = parseText(text);
   result.offline = true;
+  result.offlineReason = aiStatus.reason;
   return result;
 }
 
@@ -84,7 +94,7 @@ export async function extractText(text, onStatus = () => {}) {
       return await extractWithSample(null, false, onStatus, text);
     } catch (e) {
       if (!e.fallback) throw e;
-      markSampleBlocked();
+      markSampleBlocked(e.code);
     }
   }
   if (getApiKey()) {
@@ -93,6 +103,7 @@ export async function extractText(text, onStatus = () => {}) {
   }
   const result = parseText(text);
   result.offline = true;
+  result.offlineReason = aiStatus.reason;
   return result;
 }
 
@@ -147,7 +158,7 @@ async function extractWithSample(file, isPdf, onStatus, pastedText = '') {
   } catch (e) {
     const code = e?.code;
     if (['not_granted', 'sampling_disabled', 'not_declared', 'capability_disabled', 'capability_removed', 'images_unavailable'].includes(code)) {
-      const err = new Error('Claude is not allowed on this page'); err.fallback = true; throw err;
+      const err = new Error('Claude is not allowed on this page'); err.fallback = true; err.code = code; throw err;
     }
     const msg = {
       rate_limited: 'Too many requests, or your Claude usage limit was reached. Please try again later.',

@@ -308,3 +308,7 @@ tr.best td { background: var(--good-bg); }
 .chat-input input { flex: 1; min-width: 0; }
 @media (max-width: 820px) { .chat-log { max-height: 55vh; } }
 .paste-card { margin-top: 14px; }
+
+/* iPhone: date inputs ignore width:100% and overflow their box */
+input[type="date"] { -webkit-appearance: none; appearance: none; display: block; min-width: 0; max-width: 100%; text-align: left; }
+input[type="date"]::-webkit-date-and-time-value { text-align: left; }

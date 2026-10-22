@@ -1,5 +1,5 @@
 import * as db from './store.js';
-import { extractDocument, extractText, guessCategory, aiMode } from './extract.js';
+import { extractDocument, extractText, guessCategory, aiMode, aiStatus, resetSample } from './extract.js';
 import { renderAssistant } from './assistant.js';
 import { priceChart } from './chart.js';
 import { icon } from './icons.js';
@@ -105,6 +105,28 @@ function wireCategorySelect(select, root, onChange = () => {}) {
   });
 }
 
+/** Plain explanation of why Claude isn't reading documents, and how to fix it. */
+function whyNoAi(reason) {
+  if (reason === 'not_granted') return `Claude was <b>not allowed</b> for this page. <button type="button" class="btn btn-sm" data-allow-claude>Allow Claude</button> then try again. (Or open the page menu → Permissions.)`;
+  if (reason === 'outside') return `Claude reading only works when Price Book is opened <b>inside the Claude app or claude.ai</b> — this page was opened outside it (for example in Safari directly). Open the Price Book link from your Claude app, or add an API key in <a href="#/settings">Settings</a>.`;
+  if (reason === 'unavailable') return `Claude is not available for this account right now. Try again later, or add an API key in <a href="#/settings">Settings</a>.`;
+  return `For accurate AI reading, open Price Book inside the Claude app or claude.ai, or add an API key in <a href="#/settings">Settings</a>.`;
+}
+
+document.addEventListener('click', async e => {
+  if (!e.target.closest('[data-allow-claude]')) return;
+  try {
+    const perms = await window.claude?.use?.('permissions');
+    if (!perms) throw new Error('none');
+    await perms.manage();
+    resetSample();
+    toast('Thanks — try reading the document again');
+    router();
+  } catch {
+    toast('Open the page menu (top right) → Permissions, and allow Claude.', true);
+  }
+});
+
 function empty(ic, title, text, action = '') {
   return `<div class="empty">${ic}<h3>${esc(title)}</h3><p>${text}</p>${action}</div>`;
 }
@@ -148,7 +170,7 @@ async function fillAiNotices() {
   const html = {
     claude: `<div class="notice info">${icon.sparkle}<div><b>Claude reads your documents</b> using your Claude account — no API key needed. Photos, scans and PDFs all work. The first time, claude.ai asks you to allow it.</div></div>`,
     key: '',
-    offline: `<div class="notice info">${icon.info}<div>Using the basic offline reader (works best on clear, computer-made PDFs). For accurate reading of photos and scans, open the app inside claude.ai or add an API key in <a href="#/settings">Settings</a>.</div></div>`,
+    offline: `<div class="notice">${icon.alert}<div><b>Claude reading is off</b> — the basic reader is used (works best on clear, computer-made PDFs).<div class="small" style="margin-top:6px">${whyNoAi(aiStatus.reason)}</div></div></div>`,
   }[m];
   slots.forEach(el => { if (el.isConnected) el.innerHTML = html; });
 }
@@ -238,7 +260,7 @@ function docForm(container, data, { mode, onSubmit, onCancel }) {
   const catOptions = categoryOptions;
 
   container.innerHTML = `
-    ${data.offline ? `<div class="notice" style="margin-bottom:14px">${icon.alert}<div>Read with the basic offline reader — <b>please check every line</b> before saving. Add an API key in <a href="#/settings">Settings</a> for accurate AI reading.</div></div>` : ''}
+    ${data.offline ? `<div class="notice" style="margin-bottom:14px">${icon.alert}<div>Read with the basic offline reader — <b>please check every line</b> before saving.<div class="small" style="margin-top:6px">${whyNoAi(data.offlineReason)}</div></div></div>` : ''}
     ${data.fromFile ? `<div class="notice info" style="margin-bottom:14px">${icon.check}<div>Found <b>${items.length}</b> item${items.length === 1 ? '' : 's'} in <b>${esc(data.fromFile)}</b>. Check the details below, fix anything wrong, then ${mode === 'save' ? 'save' : 'compare'}. The file itself is not stored.</div></div>` : ''}
     <form id="docForm" autocomplete="off">
       <div class="card">
@@ -1001,7 +1023,7 @@ function renderSettings() {
     const info = {
       claude: ['badge-good', 'Ready — using your Claude account', 'You are using the app inside claude.ai, so Claude reads your invoices and answers <a href="#/ask">Ask AI</a> questions using your own Claude account. <b>No API key needed.</b> The first time, claude.ai asks you to allow it.'],
       key: ['badge-good', 'Ready — using your API key', 'Claude reads invoices and answers <a href="#/ask">Ask AI</a> questions using your API key below.'],
-      offline: ['badge-warn', 'Basic reader only', 'Open the app inside claude.ai (no key needed), or add an API key below, for accurate AI reading and the Ask AI assistant.'],
+      offline: ['badge-warn', 'Basic reader only', whyNoAi(aiStatus.reason)],
     }[m];
     badge.className = 'badge ' + info[0]; badge.textContent = info[1]; txt.innerHTML = info[2];
   });

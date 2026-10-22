@@ -274,7 +274,7 @@ export async function renderAssistant(view, toast) {
       reply.content = text; reply.pending = '';
     } catch (e) {
       const code = e?.code || (ctl?.signal.aborted ? 'cancelled' : undefined);
-      if (code === 'not_granted' || code === 'sampling_disabled') markSampleBlocked();
+      if (code === 'not_granted' || code === 'sampling_disabled') markSampleBlocked(code);
       reply.failed = true;
       reply.pending = '';
       reply.content = (e?.text ? e.text + '\n\n' : '') + ({
