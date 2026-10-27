@@ -109,6 +109,7 @@ export function mergeStates(a, b) {
     projects: live(byId(a.projects, b.projects)),
     lists: live(byId(a.lists, b.lists)),
     deleted,
+    imported: { ...(a.imported || {}), ...(b.imported || {}) },
     categories: cats,
     settings: { ...(a.settings || {}), ...(b.settings || {}) },
     updatedAt: Date.now(),
@@ -374,6 +375,17 @@ export function saveList(list) {
   return ex || state.lists[0];
 }
 export function deleteList(id) { tomb([id]); state.lists = state.lists.filter(l => l.id !== id); save(); }
+
+// ---------- Files already imported (so a WhatsApp export can be imported again without repeats) ----------
+export const isImported = key => !!(state.imported && state.imported[key]);
+export function markImported(keys) {
+  state.imported = state.imported || {};
+  const t = Date.now();
+  keys.forEach(k => { state.imported[k] = t; });
+  const all = Object.entries(state.imported);
+  if (all.length > 5000) state.imported = Object.fromEntries(all.sort((a, b) => b[1] - a[1]).slice(0, 4000));
+  save();
+}
 
 // ---------- Backup ----------
 export function exportJSON() { return JSON.stringify(state, null, 2); }

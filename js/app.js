@@ -3,6 +3,7 @@ import { extractDocument, extractText, guessCategory, aiMode, aiStatus, resetSam
 import { renderAssistant } from './assistant.js';
 import { initSync, onSyncChange, sync, setTeamMode } from './sync.js';
 import { renderMaterials } from './materials.js';
+import { renderImport } from './importer.js';
 import { renderRequest } from './request.js';
 import { renderMulti } from './multiquote.js';
 import { renderReports, renderProjects, renderProject } from './reports.js';
@@ -25,6 +26,7 @@ const routes = {
   settings: renderSettings,
   ask: () => renderAssistant(view(), toast),
   materials: renderMaterials,
+  import: renderImport,
   request: renderRequest,
   reports: renderReports,
   projects: renderProjects,
@@ -36,7 +38,7 @@ function router() {
   const [name, arg] = location.hash.replace(/^#\/?/, '').split('?')[0].split('/');
   const fn = routes[name] || renderDashboard;
   const navKey = { product: 'search', supplier: 'suppliers', project: 'projects' }[name] || name || 'dashboard';
-  const inMore = ['settings', 'suppliers', 'ask', 'request', 'reports', 'projects', 'more'].includes(navKey);
+  const inMore = ['import', 'settings', 'suppliers', 'ask', 'request', 'reports', 'projects', 'more'].includes(navKey);
   $$('[data-nav]').forEach(a => a.classList.toggle('active', a.dataset.nav === navKey || (inMore && a.dataset.nav === 'more')));
   window.scrollTo(0, 0);
   fn(arg ? decodeURIComponent(arg) : undefined);
@@ -152,6 +154,7 @@ function renderAdd() {
       <button class="${manual ? '' : 'active'}" data-tab="upload">${icon.upload} Upload document</button>
       <button class="${manual ? 'active' : ''}" data-tab="manual">${icon.edit} Type manually</button>
     </div>
+    <a class="notice info" href="#/import" style="margin-bottom:16px;color:var(--text)">${icon.whatsapp}<div><b>Many files or a whole WhatsApp group?</b> Use <u>Import many</u> — pick a WhatsApp chat export or select lots of PDFs and photos at once.</div></a>
     <div id="addBody"></div>`;
 
   const body = $('#addBody');
@@ -763,6 +766,7 @@ function showAlerts(alerts) {
 }
 
 const TOOLS = [
+  ['#/import', 'whatsapp', 'Import from WhatsApp', 'A whole group or many files at once'],
   ['#/materials', 'list', 'Price a material list', 'Best price & supplier for every line'],
   ['#/compare?multi', 'grid', 'Compare quotes', '2–6 quotes side by side'],
   ['#/request', 'send', 'Request quotes', 'WhatsApp message to suppliers'],

@@ -362,3 +362,16 @@ input[type="date"]::-webkit-date-and-time-value { text-align: left; }
 .tabs.tabs-2 { display: grid; grid-template-columns: 1fr 1fr; width: 100%; max-width: 460px; }
 .tabs.tabs-2 a.tabs-a { justify-content: center; padding: 8px 6px; font-size: 14px; }
 @media (max-width: 420px) { .bar-lbl { font-size: 9px; } }
+
+/* Import many */
+.steps { margin: 6px 0 10px; padding-left: 20px; color: var(--text-2); }
+.steps li { margin-bottom: 4px; }
+.progress { height: 8px; background: var(--surface-2); border-radius: 99px; overflow: hidden; }
+.progress div { height: 100%; background: var(--brand); transition: width .3s; }
+.import-list { display: grid; gap: 10px; margin-top: 14px; }
+.import-item { padding: 14px 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); border-left: 4px solid var(--brand); }
+.import-item.saved { border-left-color: var(--good); }
+.import-item.muted-item { border-left-color: var(--border); padding: 10px 14px; }
+.import-item.error { border-left-color: var(--bad); }
+.spinner-sm { width: 14px; height: 14px; border-width: 2px; display: inline-block; vertical-align: -2px; margin: 0 6px 0 0; }
+a.notice { text-decoration: none; }

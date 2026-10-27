@@ -146,7 +146,7 @@ function jsonInstructions(categories) {
 Allowed categories: ${categories.join(' | ')}
 
 Reply with ONLY one JSON object in exactly this shape (use null where a value is not shown):
-{"document_type":"invoice|quotation|other","supplier":{"name":"","contact_person":null,"phone":null,"email":null,"address":null,"tax_id":null},"document_number":null,"date":"YYYY-MM-DD","currency":"AED","vat_percent":null,"delivery_charge":null,"payment_terms":null,"delivery_time":null,"items":[{"product":"","category":"","unit":null,"quantity":null,"unit_price":0,"line_total":null}]}`;
+{"document_type":"invoice|quotation|purchase_order|other","supplier":{"name":"","contact_person":null,"phone":null,"email":null,"address":null,"tax_id":null},"document_number":null,"date":"YYYY-MM-DD","currency":"AED","vat_percent":null,"delivery_charge":null,"payment_terms":null,"delivery_time":null,"items":[{"product":"","category":"","unit":null,"quantity":null,"unit_price":0,"line_total":null}]}`;
 }
 
 async function extractWithSample(file, isPdf, onStatus, pastedText = '') {
@@ -217,7 +217,7 @@ function schema(categories) {
     additionalProperties: false,
     required: ['document_type', 'supplier', 'document_number', 'date', 'currency', 'vat_percent', 'delivery_charge', 'payment_terms', 'delivery_time', 'items'],
     properties: {
-      document_type: { type: 'string', enum: ['invoice', 'quotation', 'other'] },
+      document_type: { type: 'string', enum: ['invoice', 'quotation', 'purchase_order', 'other'] },
       supplier: {
         type: 'object',
         additionalProperties: false,
@@ -251,9 +251,10 @@ function schema(categories) {
   };
 }
 
-const PROMPT = `Extract the purchase details from this supplier invoice or quotation.
+const PROMPT = `Extract the purchase details from this supplier invoice, quotation or purchase order.
 
-- supplier: the company SELLING the goods (the issuer of the document), not the customer it is addressed to.
+- supplier: the company SELLING the goods. On an invoice or quotation that is the issuer of the document. On a purchase order (PO) it is the vendor the order is sent TO, not the company issuing the PO.
+- If this is NOT an invoice, quotation or purchase order with prices (for example a photo of goods, a site photo, a delivery note without prices, or a chat screenshot without prices), use document_type "other" and an empty items list.
 - product: a clear, complete product name including brand, size, grade and specification (e.g. "OPC Cement 50kg bag", "Steel Rebar 12mm Grade 60"). Keep it as written but readable; fix obvious OCR mistakes.
 - unit_price: price per single unit BEFORE tax/VAT, as a plain number. If only a line total and quantity are given, divide. If a discount is shown per line, use the discounted unit price.
 - unit: unit of measure as written (bag, pcs, ton, m, kg, ltr, box, roll, sqm...).
@@ -306,7 +307,7 @@ async function extractWithClaude(file, isPdf, onStatus, pastedText = '') {
 
 function fromAiJson(data, categories) {
   return {
-    docType: data.document_type === 'quotation' ? 'quotation' : data.document_type === 'invoice' ? 'invoice' : 'other',
+    docType: ['quotation', 'invoice', 'purchase_order'].includes(data.document_type) ? data.document_type : 'other',
     supplier: {
       name: data.supplier?.name || '',
       contact: data.supplier?.contact_person || '',
@@ -454,7 +455,7 @@ const SKIP = /\b(sub\s*total|total|vat|tax|grand|discount|balance|amount\s+due|b
 export function parseText(text) {
   const lines = text.split(/\r?\n/).map(l => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
   const { categories } = getState();
-  const out = { docType: /quot/i.test(text) ? 'quotation' : /invoice/i.test(text) ? 'invoice' : 'other', supplier: { name: '' }, docRef: '', date: '', currency: '', items: [] };
+  const out = { docType: /purchase\s*order|\bP\.?O\.?\s*(no|#)/i.test(text) ? 'purchase_order' : /quot/i.test(text) ? 'quotation' : /invoice/i.test(text) ? 'invoice' : 'other', supplier: { name: '' }, docRef: '', date: '', currency: '', items: [] };
 
   out.supplier.name = (lines.find(l => /[a-z]{3}/i.test(l) && !/invoice|quotation|tax|date/i.test(l)) || '').slice(0, 80);
   const email = text.match(/[\w.+-]+@[\w-]+\.[\w.]+/); if (email) out.supplier.email = email[0];

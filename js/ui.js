@@ -32,7 +32,7 @@ export function ago(d) {
 }
 export const pct = v => `${v > 0 ? '+' : ''}${(v * 100).toFixed(1)}%`;
 export const supplierName = id => db.getSupplier(id)?.name || 'Unknown';
-export const docLabel = t => ({ invoice: 'Invoice', quotation: 'Quotation', manual: 'Manual entry', other: 'Document' }[t] || 'Document');
+export const docLabel = t => ({ invoice: 'Invoice', quotation: 'Quotation', purchase_order: 'Purchase order', manual: 'Manual entry', other: 'Document' }[t] || 'Document');
 
 export function toast(msg, bad = false) {
   const t = document.createElement('div');
@@ -179,7 +179,7 @@ export function docForm(container, data, { mode, onSubmit, onCancel, submitLabel
         <div class="grid grid-3">
           <div class="field"><label>Supplier name *</label><input name="supName" list="dlSup" required value="${esc(sup.name)}" placeholder="e.g. Al Noor Building Materials"></div>
           <div class="field"><label>Document type</label><select name="docType">
-            ${['quotation', 'invoice', 'manual', 'other'].map(t => `<option value="${t}" ${t === (data.docType || (mode === 'compare' ? 'quotation' : 'manual')) ? 'selected' : ''}>${docLabel(t)}</option>`).join('')}
+            ${['quotation', 'invoice', 'purchase_order', 'manual', 'other'].map(t => `<option value="${t}" ${t === (data.docType || (mode === 'compare' ? 'quotation' : 'manual')) ? 'selected' : ''}>${docLabel(t)}</option>`).join('')}
           </select></div>
           <div class="field"><label>Date *</label><input name="date" type="date" required value="${esc(data.date || db.today())}"></div>
           <div class="field"><label>Invoice / quote no.</label><input name="docRef" value="${esc(data.docRef)}"></div>

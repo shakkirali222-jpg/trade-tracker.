@@ -10,6 +10,7 @@ A simple, phone-friendly web app to record supplier prices, search them, and che
 - **Check a quote** — upload a new quotation and get a clear comparison for each item: cheaper / same / slightly higher / much higher than your best previous price, who offered the best price and when, what the same supplier charged last time, plus the total possible saving and plain-language advice on what to negotiate.
 - **Material categories** — Cement & Concrete, Steel & Metal, Electrical, Plumbing, Paint, Tiles, and more. Assigned automatically; add or rename your own in Settings.
 - **Product pages** — best current price, lowest/highest/average, a trend chart per supplier, and the full history.
+- **Import many / WhatsApp** — pick a WhatsApp chat export (.zip, any size — it is opened on the phone, not uploaded) or select many PDFs and photos at once. Every invoice, quotation and purchase order inside is read one by one; photos that aren't price documents are skipped; you review and save. Files already imported are skipped next time, and you can limit it to recent messages.
 - **Material list pricing** — upload a material list (Excel, PDF, photo, text) or paste it, and the app fills in the best price and supplier for each line, an estimated total, the cheapest supplier split, and what one supplier alone would cost. Missing prices can go straight into a quote request. Lists can be saved and re-priced later.
 - **Compare several quotes** — 2–6 quotations side by side: cheapest supplier per item, totals with VAT and delivery, payment terms, delivery time, supplier rating, and the best "mix".
 - **Request quotes** — pick materials and suppliers; a ready-made WhatsApp message opens for each supplier.
@@ -55,6 +56,7 @@ js/match.js           fuzzy product-name matching
 js/sync.js            saving to Claude (private per person, or a shared team book)
 js/ui.js              shared helpers: forms, upload/paste widget, dialogs, WhatsApp sharing
 js/units.js           unit conversion
+js/importer.js        WhatsApp export / many-files import
 js/materials.js       material list pricing
 js/multiquote.js      side-by-side quote comparison
 js/request.js         quote requests to suppliers
